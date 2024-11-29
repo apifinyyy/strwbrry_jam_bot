@@ -5,27 +5,61 @@ from discord.ext import commands
 class Welcome(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.logger = bot.logger.getChild('welcome')
 
-    def get_welcome_config(self, guild_id: int) -> dict:
-        """Get welcome configuration for a guild."""
-        config = self.bot.config_manager.get_guild_config(guild_id)
-        return config.get('welcome', {
+    async def cog_load(self):
+        """Called when the cog is loaded."""
+        try:
+            await self._init_welcome_config()
+        except Exception as e:
+            self.logger.error(f"Error initializing welcome config: {e}")
+            raise
+
+    async def _init_welcome_config(self):
+        """Initialize welcome configuration."""
+        default_config = {
             'welcome_channel': None,
             'welcome_message': 'Welcome {user} to {server}!',
             'goodbye_channel': None,
             'goodbye_message': 'Goodbye {user}, we\'ll miss you!'
-        })
+        }
 
-    def save_welcome_config(self, guild_id: int, welcome_config: dict):
+        try:
+            if not await self.bot.data_manager.exists('welcome_config'):
+                await self.bot.data_manager.save('welcome_config', 'default', default_config)
+            self.logger.info("Welcome config initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize welcome config: {e}")
+            raise
+
+    async def get_welcome_config(self, guild_id: int) -> dict:
+        """Get welcome configuration for a guild."""
+        try:
+            config = await self.bot.data_manager.load('welcome_config', str(guild_id))
+            if not config:
+                config = await self.bot.data_manager.load('welcome_config', 'default')
+            return config or {
+                'welcome_channel': None,
+                'welcome_message': 'Welcome {user} to {server}!',
+                'goodbye_channel': None,
+                'goodbye_message': 'Goodbye {user}, we\'ll miss you!'
+            }
+        except Exception as e:
+            self.logger.error(f"Failed to load welcome config: {e}")
+            raise
+
+    async def save_welcome_config(self, guild_id: int, welcome_config: dict):
         """Save welcome configuration for a guild."""
-        config = self.bot.config_manager.get_guild_config(guild_id)
-        config['welcome'] = welcome_config
-        self.bot.config_manager.set_guild_config(guild_id, config)
+        try:
+            await self.bot.data_manager.save('welcome_config', str(guild_id), welcome_config)
+        except Exception as e:
+            self.logger.error(f"Failed to save welcome config: {e}")
+            raise
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         """Handle member join events."""
-        config = self.get_welcome_config(member.guild.id)
+        config = await self.get_welcome_config(member.guild.id)
         if not config['welcome_channel']:
             return
 
@@ -38,12 +72,12 @@ class Welcome(commands.Cog):
                 )
                 await channel.send(message)
         except (ValueError, TypeError, discord.Forbidden):
-            pass  # Invalid channel ID or no permissions
+            self.logger.error(f"Error sending welcome message: {member.guild.id}")
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
         """Handle member leave events."""
-        config = self.get_welcome_config(member.guild.id)
+        config = await self.get_welcome_config(member.guild.id)
         if not config['goodbye_channel']:
             return
 
@@ -56,7 +90,7 @@ class Welcome(commands.Cog):
                 )
                 await channel.send(message)
         except (ValueError, TypeError, discord.Forbidden):
-            pass  # Invalid channel ID or no permissions
+            self.logger.error(f"Error sending goodbye message: {member.guild.id}")
 
     @app_commands.command(name="setwelcome", description="Set the welcome message and channel")
     @app_commands.checks.has_permissions(administrator=True)
@@ -67,12 +101,12 @@ class Welcome(commands.Cog):
         message: str = None
     ):
         """Set welcome message and channel."""
-        config = self.get_welcome_config(interaction.guild.id)
+        config = await self.get_welcome_config(interaction.guild.id)
         config['welcome_channel'] = str(channel.id)
         if message:
             config['welcome_message'] = message
         
-        self.save_welcome_config(interaction.guild.id, config)
+        await self.save_welcome_config(interaction.guild.id, config)
 
         await interaction.response.send_message(
             f"Welcome messages will be sent to {channel.mention}\n"
@@ -88,12 +122,12 @@ class Welcome(commands.Cog):
         message: str = None
     ):
         """Set goodbye message and channel."""
-        config = self.get_welcome_config(interaction.guild.id)
+        config = await self.get_welcome_config(interaction.guild.id)
         config['goodbye_channel'] = str(channel.id)
         if message:
             config['goodbye_message'] = message
         
-        self.save_welcome_config(interaction.guild.id, config)
+        await self.save_welcome_config(interaction.guild.id, config)
 
         await interaction.response.send_message(
             f"Goodbye messages will be sent to {channel.mention}\n"
@@ -104,7 +138,7 @@ class Welcome(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     async def test_welcome(self, interaction: discord.Interaction):
         """Test the welcome message."""
-        config = self.get_welcome_config(interaction.guild.id)
+        config = await self.get_welcome_config(interaction.guild.id)
         if not config['welcome_channel']:
             await interaction.response.send_message(
                 "❌ Welcome channel not set! Use `/setwelcome` first.",
@@ -144,7 +178,7 @@ class Welcome(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     async def test_goodbye(self, interaction: discord.Interaction):
         """Test the goodbye message."""
-        config = self.get_welcome_config(interaction.guild.id)
+        config = await self.get_welcome_config(interaction.guild.id)
         if not config['goodbye_channel']:
             await interaction.response.send_message(
                 "❌ Goodbye channel not set! Use `/setgoodbye` first.",

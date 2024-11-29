@@ -5,20 +5,25 @@ from typing import Optional, Dict, List
 from datetime import datetime, timedelta
 from collections import defaultdict
 import re
+import time
+import asyncio
 
 class AutoMod(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.automod_key = "automod_config"
-        self.spam_tracker = defaultdict(lambda: defaultdict(list))  # guild -> user -> message timestamps
-        self.raid_tracker = defaultdict(list)  # guild -> join timestamps
-        self.init_data()
+        self.message_trackers = {}  # guild_id -> {user_id: [message_timestamps]}
+        self.join_trackers = {}     # guild_id -> [join_timestamps]
         self.cleanup_trackers.start()
 
-    def init_data(self):
+    async def cog_load(self):
+        """Called when the cog is loaded"""
+        await self.init_data()
+
+    async def init_data(self):
         """Initialize automod configuration"""
-        if not self.bot.data_manager.exists(self.automod_key):
-            self.bot.data_manager.save(self.automod_key, {
+        if not await self.bot.data_manager.exists("automod", "key = ?", self.automod_key):
+            await self.bot.data_manager.save_json("automod", self.automod_key, {
                 "default": {
                     "enabled": True,
                     "spam_settings": {
@@ -47,33 +52,44 @@ class AutoMod(commands.Cog):
                 }
             })
 
-    def get_config(self, guild_id: str) -> dict:
+    async def get_config(self, guild_id: str) -> dict:
         """Get guild-specific or default config"""
-        config = self.bot.data_manager.load(self.automod_key)
+        config = await self.bot.data_manager.load_json("automod", self.automod_key)
         return config.get(str(guild_id), config["default"])
 
     @tasks.loop(minutes=5)
     async def cleanup_trackers(self):
         """Clean up old tracking data"""
-        current_time = datetime.utcnow()
-        for guild_id in list(self.spam_tracker.keys()):
-            for user_id in list(self.spam_tracker[guild_id].keys()):
-                self.spam_tracker[guild_id][user_id] = [
-                    t for t in self.spam_tracker[guild_id][user_id]
-                    if (current_time - t).total_seconds() < 60
+        current_time = time.time()
+        
+        # Clean up message trackers
+        for guild_id in self.message_trackers:
+            for user_id in list(self.message_trackers[guild_id].keys()):
+                # Remove messages older than the time window
+                self.message_trackers[guild_id][user_id] = [
+                    ts for ts in self.message_trackers[guild_id][user_id]
+                    if current_time - ts <= 60  # 1 minute window
                 ]
-                if not self.spam_tracker[guild_id][user_id]:
-                    del self.spam_tracker[guild_id][user_id]
-            if not self.spam_tracker[guild_id]:
-                del self.spam_tracker[guild_id]
-
-        for guild_id in list(self.raid_tracker.keys()):
-            self.raid_tracker[guild_id] = [
-                t for t in self.raid_tracker[guild_id]
-                if (current_time - t).total_seconds() < 300
+                
+                # Remove user if no recent messages
+                if not self.message_trackers[guild_id][user_id]:
+                    del self.message_trackers[guild_id][user_id]
+            
+            # Remove guild if no users
+            if not self.message_trackers[guild_id]:
+                del self.message_trackers[guild_id]
+        
+        # Clean up join trackers
+        for guild_id in list(self.join_trackers.keys()):
+            # Remove joins older than the time window
+            self.join_trackers[guild_id] = [
+                ts for ts in self.join_trackers[guild_id]
+                if current_time - ts <= 300  # 5 minute window
             ]
-            if not self.raid_tracker[guild_id]:
-                del self.raid_tracker[guild_id]
+            
+            # Remove guild if no recent joins
+            if not self.join_trackers[guild_id]:
+                del self.join_trackers[guild_id]
 
     @app_commands.command(
         name="automod",
@@ -87,7 +103,7 @@ class AutoMod(commands.Cog):
         value: str
     ):
         """Configure automod settings"""
-        config = self.bot.data_manager.load(self.automod_key)
+        config = await self.bot.data_manager.load_json("automod", self.automod_key)
         guild_id = str(interaction.guild_id)
         
         if guild_id not in config:
@@ -109,7 +125,7 @@ class AutoMod(commands.Cog):
             else:
                 current[parts[-1]] = value
             
-            self.bot.data_manager.save(self.automod_key, config)
+            await self.bot.data_manager.save_json("automod", self.automod_key, config)
             await interaction.response.send_message(
                 f"✅ Updated {setting} to {value}",
                 ephemeral=True
@@ -126,7 +142,7 @@ class AutoMod(commands.Cog):
         if not message.guild or message.author.bot:
             return
             
-        config = self.get_config(str(message.guild.id))
+        config = await self.get_config(str(message.guild.id))
         if not config["enabled"]:
             return
 
@@ -138,18 +154,22 @@ class AutoMod(commands.Cog):
         # Track message
         guild_id = str(message.guild.id)
         user_id = str(message.author.id)
-        current_time = datetime.utcnow()
+        current_time = time.time()
         
         # Add message timestamp
-        self.spam_tracker[guild_id][user_id].append(current_time)
+        if guild_id not in self.message_trackers:
+            self.message_trackers[guild_id] = {}
+        if user_id not in self.message_trackers[guild_id]:
+            self.message_trackers[guild_id][user_id] = []
+        self.message_trackers[guild_id][user_id].append(current_time)
         
         # Get settings
         settings = config["spam_settings"]
-        window = timedelta(seconds=settings["time_window"])
+        window = settings["time_window"]
         
         # Check quiet hours
         if config["quiet_hours"]["enabled"]:
-            current_hour = current_time.hour
+            current_hour = datetime.utcnow().hour
             start_hour = int(config["quiet_hours"]["start"].split(":")[0])
             end_hour = int(config["quiet_hours"]["end"].split(":")[0])
             
@@ -165,8 +185,8 @@ class AutoMod(commands.Cog):
 
         # Check recent messages
         recent_messages = [
-            t for t in self.spam_tracker[guild_id][user_id]
-            if current_time - t <= window
+            ts for ts in self.message_trackers[guild_id][user_id]
+            if current_time - ts <= window
         ]
         
         should_punish = False
@@ -210,7 +230,7 @@ class AutoMod(commands.Cog):
                             title="🛡️ AutoMod Action",
                             description=f"Action taken against {member.mention}",
                             color=discord.Color.red(),
-                            timestamp=current_time
+                            timestamp=datetime.utcnow()
                         )
                         embed.add_field(name="Reason", value=reason)
                         embed.add_field(
@@ -230,16 +250,16 @@ class AutoMod(commands.Cog):
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         """Handle raid detection"""
-        config = self.get_config(str(member.guild.id))
+        config = await self.get_config(str(member.guild.id))
         if not config["enabled"]:
             return
 
         settings = config["raid_settings"]
         guild_id = str(member.guild.id)
-        current_time = datetime.utcnow()
+        current_time = time.time()
         
         # Check account age
-        account_age = (current_time - member.created_at).total_seconds()
+        account_age = (current_time - member.created_at.timestamp())
         if account_age < settings["account_age"]:
             try:
                 await member.kick(reason="Account too new during raid protection")
@@ -248,13 +268,15 @@ class AutoMod(commands.Cog):
                 pass
 
         # Track join
-        self.raid_tracker[guild_id].append(current_time)
+        if guild_id not in self.join_trackers:
+            self.join_trackers[guild_id] = []
+        self.join_trackers[guild_id].append(current_time)
         
         # Check recent joins
-        window = timedelta(seconds=settings["join_window"])
+        window = settings["join_window"]
         recent_joins = [
-            t for t in self.raid_tracker[guild_id]
-            if current_time - t <= window
+            ts for ts in self.join_trackers[guild_id]
+            if current_time - ts <= window
         ]
         
         if len(recent_joins) > settings["join_threshold"]:
@@ -293,7 +315,7 @@ class AutoMod(commands.Cog):
                 for join_time in recent_joins:
                     members = [
                         m for m in member.guild.members
-                        if (current_time - m.joined_at).total_seconds() <= settings["join_window"]
+                        if (current_time - m.joined_at.timestamp()) <= settings["join_window"]
                     ]
                     for m in members:
                         try:
@@ -307,7 +329,7 @@ class AutoMod(commands.Cog):
         try:
             await guild.edit(verification_level=discord.VerificationLevel.medium)
             
-            config = self.get_config(str(guild.id))
+            config = await self.get_config(str(guild.id))
             if config["log_channel"]:
                 channel = guild.get_channel(int(config["log_channel"]))
                 if channel:

@@ -12,68 +12,77 @@ class Moderation(commands.Cog):
         self.infractions_key = "infractions"
         self.redemption_key = "redemption_tasks"
         self.escalation_key = "escalation_config"
-        self._init_data_structure()
         self.active_punishments = {}
-        self.cleanup_task = bot.loop.create_task(self._cleanup_warnings())
+        self.cleanup_task = None
+        self.logger = bot.logger.getChild('moderation')
+
+    async def cog_load(self):
+        """Called when the cog is loaded"""
+        await self._init_data_structure()
+        self.cleanup_task = self.bot.loop.create_task(self._cleanup_warnings())
+        self.logger.info("Moderation cog loaded and initialized")
 
     def cog_unload(self):
         """Cleanup when cog is unloaded"""
         if self.cleanup_task:
             self.cleanup_task.cancel()
 
-    def _init_data_structure(self):
+    async def _init_data_structure(self):
         """Initialize the moderation data structures"""
-        if not self.bot.data_manager.exists(self.infractions_key):
-            self.bot.data_manager.save(self.infractions_key, {})
-        if not self.bot.data_manager.exists(self.redemption_key):
-            self.bot.data_manager.save(self.redemption_key, {
-                "tasks": {
-                    "help_others": {
-                        "description": "Help 3 other members with their questions",
-                        "points": 2
-                    },
-                    "contribute_positively": {
-                        "description": "Make 5 constructive contributions to discussions",
-                        "points": 2
-                    },
-                    "create_guide": {
-                        "description": "Create a helpful guide or tutorial for the community",
-                        "points": 3
+        try:
+            # Initialize infractions data structure
+            if not await self.bot.data_manager.exists(self.infractions_key):
+                await self.bot.data_manager.save(self.infractions_key, "default", {})
+            
+            # Initialize redemption tasks
+            if not await self.bot.data_manager.exists(self.redemption_key):
+                await self.bot.data_manager.save(self.redemption_key, "default", {
+                    "tasks": {
+                        "help_others": {"description": "Help 3 other members", "points": 2},
+                        "contribute_positively": {"description": "Make 5 contributions", "points": 2},
+                        "create_guide": {"description": "Create a guide", "points": 3}
                     }
-                }
-            })
-        if not self.bot.data_manager.exists(self.escalation_key):
-            self.bot.data_manager.save(self.escalation_key, {
-                "default": {
-                    "warning_thresholds": {
-                        "3": {"action": "mute", "duration": 3600},    # 1 hour mute
-                        "5": {"action": "mute", "duration": 86400},   # 24 hour mute
-                        "7": {"action": "kick", "duration": 0},       # Kick
-                        "10": {"action": "ban", "duration": 0}        # Ban
-                    },
-                    "severity_multipliers": {
-                        "1": 1,    # Normal warning
-                        "2": 2,    # Moderate warning
-                        "3": 3     # Severe warning
-                    },
-                    "warning_expiry": {
-                        "1": 2592000,  # 30 days for severity 1
-                        "2": 5184000,  # 60 days for severity 2
-                        "3": 7776000   # 90 days for severity 3
-                    },
-                    "cleanup_interval": 86400,  # 24 hours
-                    "history_retention": 15552000,  # 180 days
-                    "dm_notifications": True,
-                    "log_channel": None,
-                    "auto_pardon": False,  # Automatically remove expired warnings
-                    "require_reason": True,
-                    "allow_appeals": True,
-                    "appeal_cooldown": 604800,  # 7 days
-                    "universal_warnings": False,  # Accept warnings from other servers
-                    "share_warnings": False,     # Share warnings with other servers
-                    "warning_weight": 1.0        # Weight for warnings from other servers
-                }
-            })
+                })
+            
+            # Initialize escalation config
+            if not await self.bot.data_manager.exists(self.escalation_key):
+                await self.bot.data_manager.save(self.escalation_key, "default", {
+                    "default": {
+                        "warning_thresholds": {
+                            "3": {"action": "mute", "duration": 3600},    # 1 hour mute
+                            "5": {"action": "mute", "duration": 86400},   # 24 hour mute
+                            "7": {"action": "kick", "duration": 0},       # Kick
+                            "10": {"action": "ban", "duration": 0}        # Ban
+                        },
+                        "severity_multipliers": {
+                            "1": 1,    # Normal warning
+                            "2": 2,    # Moderate warning
+                            "3": 3     # Severe warning
+                        },
+                        "warning_expiry": {
+                            "1": 2592000,  # 30 days for severity 1
+                            "2": 5184000,  # 60 days for severity 2
+                            "3": 7776000   # 90 days for severity 3
+                        },
+                        "cleanup_interval": 86400,      # 24 hours
+                        "history_retention": 15552000,  # 180 days
+                        "dm_notifications": True,
+                        "log_channel": None,
+                        "auto_pardon": False,           # Automatically remove expired warnings
+                        "require_reason": True,
+                        "allow_appeals": True,
+                        "appeal_cooldown": 604800,      # 7 days
+                        "universal_warnings": False,    # Accept warnings from other servers
+                        "share_warnings": False,        # Share warnings with other servers
+                        "warning_weight": 1.0           # Weight for warnings from other servers
+                    }
+                })
+            
+            self.logger.info("Moderation data structures initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Error initializing moderation data: {e}")
+            raise
+
 
     def _get_guild_config(self, guild_id: str) -> dict:
         """Get guild-specific configuration or default"""
@@ -497,16 +506,12 @@ class Moderation(commands.Cog):
                 f"🤝 Allow Appeals: {config['allow_appeals']}\n"
                 f"⏳ Appeal Cooldown: {config['appeal_cooldown']//86400} days\n"
                 f"🗑️ Auto-Pardon: {config['auto_pardon']}\n"
-                f"📢 Log Channel: {f'<#{config['log_channel']}>' if config['log_channel'] else 'None'}\n"
+                f"📢 Log Channel: {'<#' + str(config['log_channel']) + '>' if config['log_channel'] else 'None'}\n"
                 f"🌐 Universal Warnings: {config['universal_warnings']} (Auto-warnings only)\n"
                 f"🤝 Share Warnings: {config['share_warnings']}\n"
                 f"⚖️ Warning Weight: {config['warning_weight']}"
             )
-            embed.add_field(
-                name="System Settings",
-                value=settings_text,
-                inline=False
-            )
+            embed.add_field(name="System Settings", value=settings_text, inline=False)
             
             # Note if using default config
             if guild_id not in self.bot.data_manager.load(self.escalation_key):

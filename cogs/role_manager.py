@@ -11,13 +11,47 @@ class RoleManager(commands.Cog):
         self.bot = bot
         self.roles_key = "roles_config"
         self.xp_key = "user_xp"
-        self.init_data()
+        # Don't start the task here, it will be started in cog_load
+        self.check_xp_roles = tasks.loop(minutes=5.0)(self._check_xp_roles)
+
+    async def cog_load(self):
+        """Called when the cog is loaded"""
+        await self.init_data()
         self.check_xp_roles.start()
 
-    def init_data(self):
+    def cog_unload(self):
+        """Called when the cog is unloaded"""
+        self.check_xp_roles.cancel()
+
+    async def _check_xp_roles(self):
+        """Check and update roles based on XP periodically"""
+        try:
+            xp_data = await self.bot.data_manager.load_json("xp", self.xp_key)
+            roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
+            
+            for guild_id, guild_data in xp_data.items():
+                guild = self.bot.get_guild(int(guild_id))
+                if not guild:
+                    continue
+                    
+                xp_roles = roles_config.get("xp_roles", {}).get(str(guild_id), {})
+                if not xp_roles:
+                    continue
+                    
+                for user_id, user_xp in guild_data.items():
+                    member = guild.get_member(int(user_id))
+                    if not member:
+                        continue
+                        
+                    await self.update_member_roles(member, user_xp, xp_roles)
+                    
+        except Exception as e:
+            self.bot.logger.error(f"Error in XP role check task: {e}")
+
+    async def init_data(self):
         """Initialize role configuration data"""
-        if not self.bot.data_manager.exists(self.roles_key):
-            self.bot.data_manager.save(self.roles_key, {
+        if not await self.bot.data_manager.exists("roles", "key = ?", self.roles_key):
+            await self.bot.data_manager.save_json("roles", self.roles_key, {
                 "reaction_roles": {},  # message_id -> {emoji: role_id}
                 "role_groups": {},     # group_name -> [role_ids]
                 "xp_roles": {},        # guild_id -> {role_id: required_xp}
@@ -33,17 +67,17 @@ class RoleManager(commands.Cog):
                 }
             })
         
-        if not self.bot.data_manager.exists(self.xp_key):
-            self.bot.data_manager.save(self.xp_key, {})  # guild_id -> user_id -> xp
+        if not await self.bot.data_manager.exists("xp", "key = ?", self.xp_key):
+            await self.bot.data_manager.save_json("xp", self.xp_key, {})  # guild_id -> user_id -> xp
 
-    def get_user_xp(self, guild_id: str, user_id: str) -> int:
+    async def get_user_xp(self, guild_id: str, user_id: str) -> int:
         """Get user's XP in a guild"""
-        xp_data = self.bot.data_manager.load(self.xp_key)
+        xp_data = await self.bot.data_manager.load_json("xp", self.xp_key)
         return xp_data.get(str(guild_id), {}).get(str(user_id), 0)
 
     async def add_xp(self, guild_id: str, user_id: str, amount: int):
         """Add XP to a user and check for role upgrades"""
-        xp_data = self.bot.data_manager.load(self.xp_key)
+        xp_data = await self.bot.data_manager.load_json("xp", self.xp_key)
         if str(guild_id) not in xp_data:
             xp_data[str(guild_id)] = {}
         
@@ -51,29 +85,12 @@ class RoleManager(commands.Cog):
         current_xp = user_data.get(str(user_id), 0)
         user_data[str(user_id)] = current_xp + amount
         
-        self.bot.data_manager.save(self.xp_key, xp_data)
+        await self.bot.data_manager.save_json("xp", self.xp_key, xp_data)
         await self.check_user_roles(guild_id, user_id)
-
-    @tasks.loop(minutes=5)
-    async def check_xp_roles(self):
-        """Periodically check and update XP-based roles"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
-        xp_data = self.bot.data_manager.load(self.xp_key)
-        
-        for guild_id, guild_xp in xp_data.items():
-            if guild_id not in roles_config.get("xp_roles", {}):
-                continue
-                
-            guild = self.bot.get_guild(int(guild_id))
-            if not guild:
-                continue
-                
-            for user_id, xp in guild_xp.items():
-                await self.check_user_roles(guild_id, user_id)
 
     async def check_user_roles(self, guild_id: str, user_id: str):
         """Check and update a user's roles based on XP"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         xp_roles = roles_config.get("xp_roles", {}).get(str(guild_id), {})
         if not xp_roles:
             return
@@ -83,7 +100,7 @@ class RoleManager(commands.Cog):
         if not member:
             return
             
-        user_xp = self.get_user_xp(guild_id, user_id)
+        user_xp = await self.get_user_xp(guild_id, user_id)
         
         # Sort roles by XP requirement
         sorted_roles = sorted(
@@ -134,12 +151,12 @@ class RoleManager(commands.Cog):
         msg = await interaction.channel.send(embed=embed)
         await msg.add_reaction(emoji)
         
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         if str(msg.id) not in roles_config["reaction_roles"]:
             roles_config["reaction_roles"][str(msg.id)] = {}
         
         roles_config["reaction_roles"][str(msg.id)][emoji] = role.id
-        self.bot.data_manager.save(self.roles_key, roles_config)
+        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
         
         await interaction.response.send_message(
             "✅ Reaction role created!",
@@ -159,7 +176,7 @@ class RoleManager(commands.Cog):
         required_role: Optional[discord.Role] = None
     ):
         """Set an XP-based role with requirements"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         guild_id = str(interaction.guild_id)
         
         if "xp_roles" not in roles_config:
@@ -174,7 +191,7 @@ class RoleManager(commands.Cog):
                 roles_config["role_paths"] = {}
             roles_config["role_paths"][str(role.id)] = required_role.id
         
-        self.bot.data_manager.save(self.roles_key, roles_config)
+        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
         
         response = f"✅ Set {role.mention} as XP role (Required XP: {required_xp})"
         if required_role:
@@ -197,13 +214,13 @@ class RoleManager(commands.Cog):
         duration: int  # hours
     ):
         """Set a role to be temporary"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         
         if "temp_roles" not in roles_config:
             roles_config["temp_roles"] = {}
         
         roles_config["temp_roles"][str(role.id)] = duration * 3600  # convert to seconds
-        self.bot.data_manager.save(self.roles_key, roles_config)
+        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
         
         await interaction.response.send_message(
             f"✅ Set {role.mention} as temporary role ({duration} hours)",
@@ -222,7 +239,7 @@ class RoleManager(commands.Cog):
         roles: str  # Comma-separated role mentions or IDs
     ):
         """Create a group of mutually exclusive roles"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         
         if "exclusive_groups" not in roles_config:
             roles_config["exclusive_groups"] = {}
@@ -251,7 +268,7 @@ class RoleManager(commands.Cog):
             return
         
         roles_config["exclusive_groups"][group_name] = role_ids
-        self.bot.data_manager.save(self.roles_key, roles_config)
+        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
         
         role_mentions = [f"<@&{role_id}>" for role_id in role_ids]
         await interaction.response.send_message(
@@ -261,7 +278,7 @@ class RoleManager(commands.Cog):
 
     async def handle_exclusive_roles(self, member: discord.Member, new_role: discord.Role):
         """Handle mutually exclusive roles when adding a new role"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         
         # Find groups containing the new role
         for group_name, role_ids in roles_config.get("exclusive_groups", {}).items():
@@ -302,7 +319,7 @@ class RoleManager(commands.Cog):
         roles: str  # Comma-separated role mentions or IDs
     ):
         """Set up role hierarchy tiers"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         guild_id = str(interaction.guild_id)
         
         if "role_hierarchy" not in roles_config:
@@ -334,7 +351,7 @@ class RoleManager(commands.Cog):
             return
         
         roles_config["role_hierarchy"][guild_id][str(tier)] = role_ids
-        self.bot.data_manager.save(self.roles_key, roles_config)
+        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
         
         role_mentions = [f"<@&{role_id}>" for role_id in role_ids]
         await interaction.response.send_message(
@@ -348,7 +365,7 @@ class RoleManager(commands.Cog):
         role: discord.Role
     ) -> tuple[bool, str]:
         """Check if a member meets hierarchy requirements for a role"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         guild_id = str(member.guild.id)
         
         if guild_id not in roles_config.get("role_hierarchy", {}):
@@ -393,7 +410,7 @@ class RoleManager(commands.Cog):
         role: Optional[discord.Role] = None
     ):
         """View role assignment analytics"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         guild_id = str(interaction.guild_id)
         
         if "role_analytics" not in roles_config:
@@ -451,7 +468,7 @@ class RoleManager(commands.Cog):
         action: str
     ):
         """Update role analytics"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         guild_id = str(guild_id)
         role_id = str(role_id)
         
@@ -474,7 +491,7 @@ class RoleManager(commands.Cog):
             stats["removals"] += 1
             stats["active"] = max(0, stats["active"] - 1)
         
-        self.bot.data_manager.save(self.roles_key, roles_config)
+        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
 
     @app_commands.command(
         name="xpconfig",
@@ -489,7 +506,7 @@ class RoleManager(commands.Cog):
         level_multiplier: Optional[float] = None
     ):
         """Configure XP settings"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         
         if xp_per_message is not None:
             roles_config["settings"]["xp_per_message"] = xp_per_message
@@ -498,7 +515,7 @@ class RoleManager(commands.Cog):
         if level_multiplier is not None:
             roles_config["settings"]["level_multiplier"] = level_multiplier
         
-        self.bot.data_manager.save(self.roles_key, roles_config)
+        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
         
         await interaction.response.send_message(
             "✅ XP settings updated!",
@@ -516,9 +533,9 @@ class RoleManager(commands.Cog):
     ):
         """Check XP progress"""
         user = user or interaction.user
-        xp = self.get_user_xp(str(interaction.guild_id), str(user.id))
+        xp = await self.get_user_xp(str(interaction.guild_id), str(user.id))
         
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         xp_roles = roles_config.get("xp_roles", {}).get(
             str(interaction.guild_id),
             {}
@@ -561,11 +578,11 @@ class RoleManager(commands.Cog):
         if message.author.bot or not message.guild:
             return
             
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         settings = roles_config["settings"]
         
         # Check cooldown
-        xp_data = self.bot.data_manager.load(self.xp_key)
+        xp_data = await self.bot.data_manager.load_json("xp", self.xp_key)
         guild_id = str(message.guild.id)
         user_id = str(message.author.id)
         
@@ -585,7 +602,7 @@ class RoleManager(commands.Cog):
         if guild_id not in xp_data:
             xp_data[guild_id] = {}
         xp_data[guild_id][f"{user_id}_last"] = datetime.utcnow().timestamp()
-        self.bot.data_manager.save(self.xp_key, xp_data)
+        await self.bot.data_manager.save_json("xp", self.xp_key, xp_data)
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
@@ -608,7 +625,7 @@ class RoleManager(commands.Cog):
         if payload.user_id == self.bot.user.id:
             return
             
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         message_roles = roles_config["reaction_roles"].get(str(payload.message_id))
         
         if not message_roles:
@@ -667,7 +684,7 @@ class RoleManager(commands.Cog):
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
         """Handle reaction role removal"""
-        roles_config = self.bot.data_manager.load(self.roles_key)
+        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
         message_roles = roles_config["reaction_roles"].get(str(payload.message_id))
         
         if not message_roles:
@@ -684,6 +701,40 @@ class RoleManager(commands.Cog):
         if role and member and role in member.roles:
             await member.remove_roles(role)
             await self.update_role_analytics(guild.id, role.id, "remove")
+
+    async def _cleanup_warnings(self):
+        """Background task to clean up expired warnings"""
+        await self.bot.wait_until_ready()
+        while not self.bot.is_closed():
+            try:
+                infractions = await self.bot.data_manager.load_json("infractions", "infractions_key")
+                current_time = datetime.utcnow()
+                modified = False
+
+                for guild_id, guild_infractions in list(infractions.items()):
+                    for user_id, user_infractions in list(guild_infractions.items()):
+                        active_infractions = [
+                            inf for inf in user_infractions 
+                            if not inf.get("expires_at") or 
+                            datetime.fromisoformat(inf["expires_at"]) > current_time
+                        ]
+                        if len(active_infractions) != len(user_infractions):
+                            guild_infractions[user_id] = active_infractions
+                            modified = True
+
+                if modified:
+                    await self.bot.data_manager.save_json("infractions", "infractions_key", infractions)
+                    self.logger.info("Cleaned up expired warnings")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(f"Error in warning cleanup task: {e}")
+
+            try:
+                await asyncio.sleep(3600)  # Check every hour
+            except asyncio.CancelledError:
+                break
 
 async def setup(bot):
     await bot.add_cog(RoleManager(bot))

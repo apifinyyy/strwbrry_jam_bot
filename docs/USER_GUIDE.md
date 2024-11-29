@@ -114,6 +114,51 @@ When an admin starts a challenge:
 - Follow server rules
 - Wait patiently for response
 
+## Warning System
+
+### Checking Your Warnings
+```
+/infractions - View your warning history
+```
+Shows:
+- Active warnings
+- Warning severity and points
+- Expiry dates
+- Appeal status
+- Redemption progress
+
+### Appealing Warnings
+```
+/appeal [warning_id] [reason]
+```
+- Provide a clear reason for appeal
+- Be honest and respectful
+- One appeal per warning
+- 7-day cooldown between appeals
+
+### Warning Redemption
+```
+/redeem [task] [proof]
+```
+Available Tasks:
+1. Help Others (2 points)
+   - Help 3 other members
+   - Document the assistance
+
+2. Positive Contributions (2 points)
+   - Make 5 constructive contributions
+   - Show examples
+
+3. Create Guide (3 points)
+   - Create helpful server guide
+   - Must be comprehensive
+
+Tips:
+- Provide clear proof
+- Be patient for review
+- Follow server rules
+- Complete tasks honestly
+
 ## Tips and Tricks
 
 ### Earning Currency

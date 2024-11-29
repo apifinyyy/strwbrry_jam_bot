@@ -7,12 +7,13 @@ from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 import aiohttp
 import os
-from utils.data_manager import DataManager
+import re
 
 class Social(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.data_manager = DataManager()
+        self.data_manager = bot.data_manager  # Use bot's data_manager instance
+        self.logger = bot.logger.getChild('social')  # Add logger
         self.session = None  # aiohttp session
         self.default_themes = {
             "default": {
@@ -32,11 +33,11 @@ class Social(commands.Cog):
             }
         }
         self.available_badges = {
-            "early_supporter": "🌟",
-            "active_chatter": "💭",
-            "helper": "🤝",
-            "event_winner": "🏆",
-            "custom_badge": "✨"
+            "early_supporter": "",
+            "active_chatter": "",
+            "helper": "",
+            "event_winner": "",
+            "custom_badge": ""
         }
         self.font_path = os.path.join(os.getenv('SYSTEMROOT', ''), 'Fonts', 'arial.ttf')
         if not os.path.exists(self.font_path):
@@ -44,157 +45,125 @@ class Social(commands.Cog):
 
     async def cog_load(self):
         """Called when the cog is loaded."""
-        self.session = aiohttp.ClientSession()
+        try:
+            self.session = aiohttp.ClientSession()
+            await self._init_profile_data()
+            self.logger.info("Social cog loaded successfully")
+        except Exception as e:
+            self.logger.error(f"Error loading social cog: {e}")
+            raise
+
+    async def _init_profile_data(self):
+        """Initialize default profile data."""
+        try:
+            if not await self.data_manager.exists('user_profiles'):
+                await self.data_manager.save('user_profiles', 'default', {
+                    'bio': '',
+                    'title': '',
+                    'theme': self.default_themes['default'],
+                    'badges': [],
+                    'created_at': None
+                })
+            self.logger.info("Profile data initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize profile data: {e}")
+            raise
 
     async def cog_unload(self):
         """Called when the cog is unloaded."""
         if self.session:
             await self.session.close()
 
-    @app_commands.command(name="profile")
-    @app_commands.describe(
-        user="The user whose profile to view (leave empty for your own)",
-    )
-    async def view_profile(
-        self,
-        interaction: discord.Interaction,
-        user: Optional[discord.Member] = None
-    ):
-        """View a user's profile card"""
-        await interaction.response.defer()
-        
+    @app_commands.command(name="setbio", description="Set your profile bio")
+    async def set_bio(self, interaction: discord.Interaction, bio: str):
+        """Set your profile bio."""
         try:
-            user = user or interaction.user
+            if len(bio) > 1000:
+                await interaction.response.send_message("Bio must be 1000 characters or less!", ephemeral=True)
+                return
+
+            await self.data_manager.update_user_profile(
+                user_id=interaction.user.id,
+                bio=bio
+            )
             
-            # Get user profile data
-            profile_data = await self.data_manager.get_user_profile(user.id)
+            await interaction.response.send_message("Bio updated successfully!", ephemeral=True)
+        except Exception as e:
+            self.logger.error(f"Error setting bio: {e}")
+            await interaction.response.send_message("Failed to update bio. Please try again later.", ephemeral=True)
+            raise e
+
+    @app_commands.command(name="settheme", description="Set your profile theme color")
+    async def set_theme(self, interaction: discord.Interaction, color: str):
+        """Set your profile theme color."""
+        try:
+            # Validate color format (hex code)
+            if not re.match(r'^#(?:[0-9a-fA-F]{3}){1,2}$', color):
+                await interaction.response.send_message("Invalid color format! Please use hex code (e.g., #FF0000)", ephemeral=True)
+                return
+
+            await self.data_manager.update_user_profile(
+                user_id=interaction.user.id,
+                theme=color
+            )
+            
+            await interaction.response.send_message("Theme color updated successfully!", ephemeral=True)
+        except Exception as e:
+            self.logger.error(f"Error setting theme: {e}")
+            await interaction.response.send_message("Failed to update theme. Please try again later.", ephemeral=True)
+            raise e
+
+    @app_commands.command(name="settitle", description="Set your profile title")
+    async def set_title(self, interaction: discord.Interaction, title: str):
+        """Set your profile title."""
+        try:
+            if len(title) > 100:
+                await interaction.response.send_message("Title must be 100 characters or less!", ephemeral=True)
+                return
+
+            await self.data_manager.update_user_profile(
+                user_id=interaction.user.id,
+                title=title
+            )
+            
+            await interaction.response.send_message("Title updated successfully!", ephemeral=True)
+        except Exception as e:
+            self.logger.error(f"Error setting title: {e}")
+            await interaction.response.send_message("Failed to update title. Please try again later.", ephemeral=True)
+            raise e
+
+    @app_commands.command(name="profile", description="View your or another user's profile")
+    async def view_profile(self, interaction: discord.Interaction, user: Optional[discord.Member] = None):
+        """View a user's profile."""
+        try:
+            target_user = user or interaction.user
+            profile_data = await self.data_manager.get_user_profile(target_user.id)
+
             if not profile_data:
-                profile_data = {
-                    "theme": "default",
-                    "badges": [],
-                    "bio": "No bio set",
-                    "custom_title": None
-                }
+                if target_user == interaction.user:
+                    await interaction.response.send_message("You haven't set up your profile yet! Use /setbio, /settheme, or /settitle to get started.", ephemeral=True)
+                else:
+                    await interaction.response.send_message(f"{target_user.display_name} hasn't set up their profile yet!", ephemeral=True)
+                return
 
-            # Create profile card
-            card = await self.create_profile_card(user, profile_data)
-            
-            # Send profile card
-            await interaction.followup.send(
-                file=discord.File(card, "profile.png")
-            )
-        except Exception as e:
-            await interaction.followup.send(
-                "An error occurred while creating your profile. Please try again later.",
-                ephemeral=True
-            )
-            raise e
-
-    @app_commands.command(name="settheme")
-    @app_commands.describe(
-        theme="The theme to apply to your profile"
-    )
-    @app_commands.choices(theme=[
-        app_commands.Choice(name=theme, value=theme)
-        for theme in ["default", "night", "sunset"]
-    ])
-    async def set_theme(
-        self,
-        interaction: discord.Interaction,
-        theme: str
-    ):
-        """Set your profile theme"""
-        if theme not in self.default_themes:
-            themes_list = ", ".join(self.default_themes.keys())
-            await interaction.response.send_message(
-                f"Invalid theme! Available themes: {themes_list}",
-                ephemeral=True
-            )
-            return
-
-        try:
-            await self.data_manager.update_user_profile(
-                interaction.user.id,
-                {"theme": theme}
+            # Create embed
+            embed = discord.Embed(
+                title=f"{target_user.display_name}'s Profile",
+                color=int(profile_data.get('theme', '#FF69B4').lstrip('#'), 16) if profile_data.get('theme') else 0xFF69B4
             )
             
-            await interaction.response.send_message(
-                f"Successfully set your profile theme to {theme}!",
-                ephemeral=True
-            )
-        except Exception as e:
-            await interaction.response.send_message(
-                "An error occurred while updating your theme. Please try again later.",
-                ephemeral=True
-            )
-            raise e
-
-    @app_commands.command(name="setbio")
-    @app_commands.describe(
-        bio="Your new profile bio (max 100 characters)"
-    )
-    async def set_bio(
-        self,
-        interaction: discord.Interaction,
-        bio: str
-    ):
-        """Set your profile bio"""
-        if len(bio) > 100:
-            await interaction.response.send_message(
-                "Bio must be 100 characters or less!",
-                ephemeral=True
-            )
-            return
-
-        try:
-            await self.data_manager.update_user_profile(
-                interaction.user.id,
-                {"bio": bio}
-            )
+            if profile_data.get('title'):
+                embed.add_field(name="Title", value=profile_data['title'], inline=False)
+            if profile_data.get('bio'):
+                embed.add_field(name="Bio", value=profile_data['bio'], inline=False)
             
-            await interaction.response.send_message(
-                "Successfully updated your bio!",
-                ephemeral=True
-            )
-        except Exception as e:
-            await interaction.response.send_message(
-                "An error occurred while updating your bio. Please try again later.",
-                ephemeral=True
-            )
-            raise e
+            embed.set_thumbnail(url=target_user.display_avatar.url)
+            embed.set_footer(text=f"Profile created: {profile_data.get('created_at', 'Unknown')}")
 
-    @app_commands.command(name="settitle")
-    @app_commands.describe(
-        title="Your custom profile title (max 30 characters)"
-    )
-    async def set_title(
-        self,
-        interaction: discord.Interaction,
-        title: str
-    ):
-        """Set your custom profile title"""
-        if len(title) > 30:
-            await interaction.response.send_message(
-                "Title must be 30 characters or less!",
-                ephemeral=True
-            )
-            return
-
-        try:
-            await self.data_manager.update_user_profile(
-                interaction.user.id,
-                {"custom_title": title}
-            )
-            
-            await interaction.response.send_message(
-                "Successfully updated your title!",
-                ephemeral=True
-            )
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(
-                "An error occurred while updating your title. Please try again later.",
-                ephemeral=True
-            )
+            self.logger.error(f"Error viewing profile: {e}")
+            await interaction.response.send_message("Failed to load profile. Please try again later.", ephemeral=True)
             raise e
 
     async def create_profile_card(self, user: discord.Member, profile_data: dict) -> BytesIO:

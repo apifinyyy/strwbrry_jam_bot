@@ -41,3 +41,6 @@ config.yaml
 *.db
 *.sqlite3
 backups/
+
+# Server data
+[0-9]*/

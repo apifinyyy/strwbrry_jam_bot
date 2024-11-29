@@ -8,14 +8,25 @@ import asyncio
 class ServerManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.server_key = "server_config"
-        self.init_data()
+        self.server_key = "server_settings"
         self.check_server_settings.start()
 
-    def init_data(self):
-        """Initialize server configuration data"""
-        if not self.bot.data_manager.exists(self.server_key):
-            self.bot.data_manager.save(self.server_key, {
+    async def cog_load(self):
+        """Called when the cog is loaded"""
+        await self.init_data()
+
+    async def init_data(self):
+        """Initialize server configuration"""
+        if not await self.bot.data_manager.exists("server_config", "key = ?", self.server_key):
+            default_config = {
+                "welcome_channel": None,
+                "log_channel": None,
+                "mod_role": None,
+                "mute_role": None,
+                "auto_roles": [],
+                "prefix": "!",
+                "locale": "en_US",
+                "timezone": "UTC",
                 "auto_channels": {},    # guild_id -> {category_id: template}
                 "temp_channels": {},    # channel_id -> expiry_time
                 "channel_limits": {},   # guild_id -> {category_id: max_channels}
@@ -27,12 +38,13 @@ class ServerManager(commands.Cog):
                 "milestones": {},       # guild_id -> {milestone_type: last_value}
                 "backups": {},          # guild_id -> {timestamp: backup_data}
                 "backup_schedule": {},   # guild_id -> {interval, last_backup}
-            })
+            }
+            await self.bot.data_manager.save_json("server_config", self.server_key, default_config)
 
     @tasks.loop(minutes=5)
     async def check_server_settings(self):
         """Periodic check of server settings"""
-        config = self.bot.data_manager.load(self.server_key)
+        config = await self.bot.data_manager.load_json("server_config", self.server_key)
         current_time = datetime.utcnow()
 
         # Check temporary channels
@@ -83,7 +95,7 @@ class ServerManager(commands.Cog):
                 if guild:
                     await self.create_backup(guild)
 
-        self.bot.data_manager.save(self.server_key, config)
+        await self.bot.data_manager.save_json("server_config", self.server_key, config)
 
     async def get_active_members(self, guild: discord.Guild) -> list:
         """Get list of members active in the last 24 hours"""
@@ -116,7 +128,7 @@ class ServerManager(commands.Cog):
             category = await interaction.guild.create_category(category_name)
             await category.create_voice_channel(f"{channel_template} 1")
             
-            config = self.bot.data_manager.load(self.server_key)
+            config = await self.bot.data_manager.load_json("server_config", self.server_key)
             guild_id = str(interaction.guild.id)
             
             if "auto_channels" not in config:
@@ -133,7 +145,7 @@ class ServerManager(commands.Cog):
                 
             config["channel_limits"][guild_id][str(category.id)] = max_channels
             
-            self.bot.data_manager.save(self.server_key, config)
+            await self.bot.data_manager.save_json("server_config", self.server_key, config)
             
             await interaction.response.send_message(
                 f"✅ Created auto-channel category {category_name}",
@@ -157,7 +169,7 @@ class ServerManager(commands.Cog):
         channel: Optional[discord.VoiceChannel] = None
     ):
         """Set up server statistics channels"""
-        config = self.bot.data_manager.load(self.server_key)
+        config = await self.bot.data_manager.load_json("server_config", self.server_key)
         guild_id = str(interaction.guild.id)
         
         if "server_stats" not in config:
@@ -176,7 +188,7 @@ class ServerManager(commands.Cog):
                 )
             
             config["server_stats"][guild_id][stat_type] = str(channel.id)
-            self.bot.data_manager.save(self.server_key, config)
+            await self.bot.data_manager.save_json("server_config", self.server_key, config)
             
             # Update immediately
             if stat_type == "member_count":
@@ -213,7 +225,7 @@ class ServerManager(commands.Cog):
         events: str = "all"  # Comma-separated list of events or 'all'
     ):
         """Set up audit logging"""
-        config = self.bot.data_manager.load(self.server_key)
+        config = await self.bot.data_manager.load_json("server_config", self.server_key)
         guild_id = str(interaction.guild_id)
         
         if "audit_log" not in config:
@@ -224,7 +236,7 @@ class ServerManager(commands.Cog):
             "filters": events.split(',') if events != "all" else "all"
         }
         
-        self.bot.data_manager.save(self.server_key, config)
+        await self.bot.data_manager.save_json("server_config", self.server_key, config)
         
         await interaction.response.send_message(
             f"✅ Set {channel.mention} as audit log channel",
@@ -244,7 +256,7 @@ class ServerManager(commands.Cog):
         exempt_roles: Optional[str] = None  # Comma-separated role mentions
     ):
         """Set up channel cleanup rules"""
-        config = self.bot.data_manager.load(self.server_key)
+        config = await self.bot.data_manager.load_json("server_config", self.server_key)
         guild_id = str(interaction.guild_id)
         
         if "cleanup_rules" not in config:
@@ -264,7 +276,7 @@ class ServerManager(commands.Cog):
             "exempt_roles": exempt_role_ids
         }
         
-        self.bot.data_manager.save(self.server_key, config)
+        await self.bot.data_manager.save_json("server_config", self.server_key, config)
         
         await interaction.response.send_message(
             f"✅ Set cleanup rules for {channel.mention}\n"
@@ -284,7 +296,7 @@ class ServerManager(commands.Cog):
         interval: int  # hours
     ):
         """Set up automatic server backups"""
-        config = self.bot.data_manager.load(self.server_key)
+        config = await self.bot.data_manager.load_json("server_config", self.server_key)
         guild_id = str(interaction.guild_id)
         
         if "backup_schedule" not in config:
@@ -295,7 +307,7 @@ class ServerManager(commands.Cog):
             "last_backup": 0  # force immediate backup
         }
         
-        self.bot.data_manager.save(self.server_key, config)
+        await self.bot.data_manager.save_json("server_config", self.server_key, config)
         
         # Create initial backup
         await self.create_backup(interaction.guild)
@@ -339,7 +351,7 @@ class ServerManager(commands.Cog):
         """Restore a server backup"""
         await interaction.response.defer(ephemeral=True)
         
-        config = self.bot.data_manager.load(self.server_key)
+        config = await self.bot.data_manager.load_json("server_config", self.server_key)
         guild_id = str(interaction.guild_id)
         
         if guild_id not in config.get("backups", {}):
@@ -457,7 +469,7 @@ class ServerManager(commands.Cog):
                 
                 backup_data["categories"].append(category_data)
             
-            config = self.bot.data_manager.load(self.server_key)
+            config = await self.bot.data_manager.load_json("server_config", self.server_key)
             guild_id = str(guild.id)
             
             if "backups" not in config:
@@ -477,7 +489,7 @@ class ServerManager(commands.Cog):
             if guild_id in config.get("backup_schedule", {}):
                 config["backup_schedule"][guild_id]["last_backup"] = datetime.utcnow().timestamp()
             
-            self.bot.data_manager.save(self.server_key, config)
+            await self.bot.data_manager.save_json("server_config", self.server_key, config)
             return True
             
         except Exception as e:
@@ -491,7 +503,7 @@ class ServerManager(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def list_backups(self, interaction: discord.Interaction):
         """List available server backups"""
-        config = self.bot.data_manager.load(self.server_key)
+        config = await self.bot.data_manager.load_json("server_config", self.server_key)
         guild_id = str(interaction.guild_id)
         
         if guild_id not in config.get("backups", {}):
@@ -536,7 +548,7 @@ class ServerManager(commands.Cog):
         after: discord.VoiceState
     ):
         """Handle auto voice channels"""
-        config = self.bot.data_manager.load(self.server_key)
+        config = await self.bot.data_manager.load_json("server_config", self.server_key)
         guild_id = str(member.guild.id)
         
         if guild_id not in config.get("auto_channels", {}):
@@ -623,7 +635,7 @@ class ServerManager(commands.Cog):
         message: str
     ):
         """Log an audit event"""
-        config = self.bot.data_manager.load(self.server_key)
+        config = await self.bot.data_manager.load_json("server_config", self.server_key)
         guild_id = str(guild.id)
         
         if guild_id not in config.get("audit_log", {}):

@@ -112,6 +112,28 @@ A feature-rich Discord utility bot with social features, economy system, games, 
   * Event context
   * Time tracking
 
+### 🛡️ Advanced Moderation
+- Smart Warning System
+  * Configurable thresholds
+  * Multiple severity levels
+  * Automated punishments
+  * Warning expiry
+- Redemption System
+  * Customizable tasks
+  * Point-based reduction
+  * Progress tracking
+  * Staff review system
+- Warning Appeals
+  * User-friendly interface
+  * Staff management tools
+  * Appeal cooldowns
+  * Detailed tracking
+- Universal Warnings
+  * Cross-server warnings
+  * Warning transfer
+  * Configurable weights
+  * Shared history
+
 ## 🚀 Quick Start
 
 ### Prerequisites

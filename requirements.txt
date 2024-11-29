@@ -1,13 +1,13 @@
-discord.py>=2.3.2
-python-dotenv>=1.0.0
+discord.py>=2.0.0
+python-dotenv
+asyncpg
+aiosqlite
 aiohttp>=3.8.0
 typing-extensions>=4.5.0
 asyncio>=3.4.3
 python-dateutil>=2.8.2
 pytz>=2023.3
 colorlog>=6.7.0
-aiosqlite>=0.19.0
 pyyaml>=6.0.1
 humanize>=4.7.0
-asyncpg>=0.28.0
 Pillow>=10.0.0

@@ -69,6 +69,75 @@ This guide covers all admin commands and setup instructions for Strwbrry Jam Bot
    /config logs enable member_join
 ```
 
+### Moderation System
+```
+1. Configure Warning System:
+   /escalation_config setting_type thresholds
+   Example thresholds:
+   - 3 points: 1 hour mute
+   - 5 points: 24 hour mute
+   - 7 points: kick
+   - 10 points: ban
+
+2. Set Warning Severity:
+   /escalation_config setting_type severity
+   - Level 1: Normal warning (1 point)
+   - Level 2: Moderate warning (2 points)
+   - Level 3: Severe warning (3 points)
+
+3. Configure Warning Expiry:
+   /escalation_config setting_type expiry
+   - Level 1: 30 days
+   - Level 2: 60 days
+   - Level 3: 90 days
+
+4. Set System Settings:
+   /escalation_config setting_type settings
+   - Cleanup interval
+   - History retention
+   - DM notifications
+   - Log channel
+   - Auto-pardon
+   - Universal warnings
+   - Warning sharing
+```
+
+### Warning Commands
+```
+1. Issue Warning:
+   /warn @user [reason] [severity]
+   - Severity 1-3 (default: 1)
+   - Reason required if configured
+
+2. View Infractions:
+   /infractions @user
+   - Shows active warnings
+   - Shows warning history
+   - Shows redemption progress
+
+3. Manage Appeals:
+   /manage_appeal @user [warning_id] [action] [reason]
+   - approve/deny appeals
+   - Add optional reason
+
+4. Transfer Warnings:
+   /transfer_warnings [from_server] @user [warning_ids]
+   - Transfer specific or all warnings
+```
+
+### Redemption System
+```
+1. Default Tasks:
+   - Help 3 other members (2 points)
+   - Make 5 positive contributions (2 points)
+   - Create a guide (3 points)
+
+2. Submit Redemption:
+   /redeem [task] [proof]
+   - Users submit completed tasks
+   - Mods review submissions
+```
+
 ## Tips
 - Use `/help admin` for admin command list
 - Test configurations in a private channel

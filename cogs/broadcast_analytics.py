@@ -3,30 +3,51 @@ from discord.ext import commands
 from discord import app_commands
 from typing import Optional
 from datetime import datetime, timedelta
+import asyncio
+import json
 
 class BroadcastAnalytics(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.analytics_key = "broadcast_analytics"
-        self._init_data_structure()
+        self.logger = bot.logger.getChild('broadcast_analytics')
 
-    def _init_data_structure(self):
+    async def cog_load(self):
+        """Called when the cog is loaded"""
+        try:
+            await self._init_data_structure()
+            self.logger.info("Broadcast analytics initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize broadcast analytics: {e}")
+            raise
+
+    async def _init_data_structure(self):
         """Initialize analytics data structure if it doesn't exist"""
-        if not self.bot.data_manager.exists(self.analytics_key):
-            self.bot.data_manager.save(self.analytics_key, {
-                "broadcasts": {},
-                "server_stats": {},
-                "global_stats": {
-                    "total_broadcasts": 0,
-                    "total_reach": 0,
-                    "most_active_hour": None,
-                    "avg_engagement": 0
-                }
-            })
+        try:
+            # Initialize JSON data structure if needed
+            if not await self.bot.data_manager.exists(self.analytics_key):
+                await self.bot.data_manager.save(self.analytics_key, 'default', {
+                    "broadcasts": {},
+                    "server_stats": {},
+                    "global_stats": {
+                        "total_broadcasts": 0,
+                        "total_reach": 0,
+                        "most_active_hour": None,
+                        "avg_engagement": 0
+                    },
+                    "settings": {
+                        "tracking_enabled": True,
+                        "retention_days": 30,
+                        "auto_cleanup": True
+                    }
+                })
+        except Exception as e:
+            self.logger.error(f"Error initializing broadcast analytics data: {e}")
+            raise
 
-    def update_stats(self, guild_id: str, success: bool, member_count: int):
+    async def update_stats(self, guild_id: str, success: bool, member_count: int):
         """Update broadcast statistics"""
-        analytics = self.bot.data_manager.load(self.analytics_key)
+        analytics = await self.bot.data_manager.load(self.analytics_key)
         
         # Update server stats
         if guild_id not in analytics["server_stats"]:
@@ -71,7 +92,39 @@ class BroadcastAnalytics(commands.Cog):
                                  analytics["server_stats"].values())
             analytics["global_stats"]["avg_engagement"] = total_engagement / active_servers
 
-        self.bot.data_manager.save(self.analytics_key, analytics)
+        await self.bot.data_manager.save(self.analytics_key, 'default', analytics)
+
+    async def update_message_stats(self, guild_id: int, channel_id: int, message_id: int, 
+                          views: int = 0, reactions: int = 0, responses: int = 0):
+        """Update statistics for a broadcast message"""
+        try:
+            data = await self.bot.data_manager.load(self.analytics_key)
+            msg_key = f"{guild_id}_{channel_id}_{message_id}"
+            
+            if "broadcasts" not in data:
+                data["broadcasts"] = {}
+                
+            if msg_key not in data["broadcasts"]:
+                data["broadcasts"][msg_key] = {
+                    "guild_id": guild_id,
+                    "channel_id": channel_id,
+                    "message_id": message_id,
+                    "views": 0,
+                    "reactions": 0,
+                    "responses": 0,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            
+            stats = data["broadcasts"][msg_key]
+            stats["views"] += views
+            stats["reactions"] += reactions
+            stats["responses"] += responses
+            
+            await self.bot.data_manager.save(self.analytics_key, 'default', data)
+            
+        except Exception as e:
+            self.logger.error(f"Error updating broadcast stats: {e}")
+            raise
 
     @app_commands.command(
         name="broadcaststats",
@@ -91,7 +144,7 @@ class BroadcastAnalytics(commands.Cog):
             )
             return
 
-        analytics = self.bot.data_manager.load(self.analytics_key)
+        analytics = await self.bot.data_manager.load(self.analytics_key)
         global_stats = analytics["global_stats"]
 
         # Calculate timeframe
