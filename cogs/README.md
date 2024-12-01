@@ -2,16 +2,22 @@
 
 ## 📚 Table of Contents
 - [Overview](#overview)
+- [Documentation](#documentation)
 - [Quick Start](#quick-start)
 - [Core Cogs](#core-cogs)
 - [Cog Development](#cog-development)
-- [Bot Features](#bot-features)
 - [Best Practices](#best-practices)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 
 ## 🌟 Overview
 Strwbrry Jam Bot is a feature-rich Discord bot built with modularity in mind. The bot uses a cog system for organizing features, making it easy to add, modify, or remove functionality.
+
+## 📖 Documentation
+- **[Official Documentation](https://github.com/apifinyyy/strwbrry_jam_bot/wiki)**
+- **[Support Server](https://discord.gg/XcH8JmGaHZ)**
+- **[Developer Guide](../docs/DEVELOPER_GUIDE.md)**
+- **[API Reference](../docs/API.md)**
 
 ## ⚡ Quick Start
 1. Create a new cog from template:
@@ -55,22 +61,49 @@ Commands:
 /logstatus         - View current logging configuration
 ```
 
+### Auto-Roles (`auto_roles.py`)
+Automated role management:
+- Join roles
+- Level-based roles
+- Reaction roles
+- Temporary roles
+- Role persistence
+
+### Economy (`economy.py`)
+Virtual economy system:
+- Currency management
+- Shop system
+- Trading
+- Gambling mini-games
+- Daily rewards
+
+### XP System (`xp.py`)
+Experience and leveling system:
+- Message-based XP
+- Voice activity XP
+- Role rewards
+- Leaderboards
+- Custom level-up messages
+
 ## 🛠️ Cog Development
 
 ### Basic Structure
 ```python
 from discord.ext import commands
-from discord import app_commands
+import discord
 
-class MyCog(commands.GroupCog, group_name="mycog"):
+class MyCog(commands.Cog):
     def __init__(self, bot):
-        super().__init__()
         self.bot = bot
-        self.logger = bot.logger.getChild('mycog')
-
-    @app_commands.command()
-    async def mycommand(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Hello!")
+        
+    @commands.Cog.listener()
+    async def on_ready(self):
+        print(f"{self.__class__.__name__} cog loaded")
+        
+    @commands.hybrid_command()
+    async def mycommand(self, ctx):
+        """Command description"""
+        await ctx.send("Hello!")
 
 async def setup(bot):
     await bot.add_cog(MyCog(bot))
@@ -223,4 +256,4 @@ async def command_error(self, interaction: discord.Interaction, error):
 4. Add tests if applicable
 5. Submit a pull request
 
-For more information, join our [Discord server](https://discord.gg/your-server) or check the [documentation](https://your-docs-url.com).
+For more information, join our [Discord server](https://discord.gg/XcH8JmGaHZ) or check the [documentation](https://github.com/apifinyyy/strwbrry_jam_bot/wiki).

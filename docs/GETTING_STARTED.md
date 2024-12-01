@@ -1,119 +1,84 @@
 # Getting Started with Strwbrry Jam Bot 🍓
 
-Welcome! This guide will help you get started with Strwbrry Jam Bot.
+Welcome to Strwbrry Jam Bot! This guide will help you get the bot up and running in your server quickly.
 
-## 🎮 For Server Members
+## 🔗 Quick Links
+- [Support Server](https://discord.gg/XcH8JmGaHZ)
+- [Invite Bot](https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=8&scope=bot%20applications.commands)
+- [User Guide](USER_GUIDE.md)
+- [Configuration](CONFIGURATION.md)
+- [Admin Guide](ADMIN_GUIDE.md)
 
-Just want to use the bot? It's easy!
+## 🚀 5-Minute Setup
 
-1. **Use Commands**
-   - Type `/help` to see all commands
-   - Commands are grouped by category
-   - Each command has a description
+### 1. Add Bot to Server
+1. Click the [Invite Link](https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=8&scope=bot%20applications.commands)
+2. Select your server
+3. Click "Authorize"
+4. Complete the captcha
 
-2. **Quick Commands**
-   ```
-   /profile           # View your profile
-   /balance          # Check your money
-   /daily            # Get daily rewards
-   /shop             # Visit the shop
-   /games            # List available games
-   ```
+### 2. Quick Configuration
+Run these commands:
+```
+/setauditlog     # Set up audit logging
+/serverinfo      # Shows your current server information
+/help            # Lists all commands
+```
 
-3. **Need Help?**
-   - Type `/help [command]` for detailed info
-   - Join our [Support Server](https://discord.gg/XcH8JmGaHZ)
-   - Ask a server admin
+### 3. Essential Features
+Set up the most important features:
 
-## 👑 For Server Admins
+#### Moderation
+```
+/setauditlog #mod-logs     # Set up moderation logging
+/clean                    # Delete messages from the channel
+/mute                    # Mute users
+/unmute                  # Unmute users
+```
 
-Setting up the bot for your server:
-
-1. **Quick Setup**
-   ```
-   /setup quickstart  # Run setup wizard
-   /config           # View all settings
-   /help admin       # View admin commands
-   ```
-
-2. **Essential Settings**
-   - `/welcome setup` - Welcome messages
-   - `/autorole set` - Auto-roles
-   - `/modlog set` - Moderation logging
-   - `/tickets setup` - Support tickets
-
-3. **Recommended Features**
-   - Set up auto-roles for new members
-   - Configure welcome messages
-   - Set up moderation logging
-   - Enable auto-moderation
-
-## 🛠️ For Developers
-
-Want to host your own instance?
-
-### Prerequisites
-- Python 3.11+
-- Git (optional)
-- A Discord Bot Token
-
-### Quick Setup
-
-1. **Get the Code**
-   ```bash
-   git clone https://github.com/apifinyyy/strwbrry_jam_bot.git
-   cd strwbrry_jam_bot
-   ```
-
-2. **Set Up Environment**
-   ```bash
-   python -m venv venv
-   
-   # On Windows
-   .\venv\Scripts\activate
-   
-   # On Linux/Mac
-   source venv/bin/activate
-   
-   pip install -r requirements.txt
-   ```
-
-3. **Configure Bot**
-   - Copy `.env.example` to `.env`
-   - Add your bot token and settings
-   ```env
-   DISCORD_TOKEN=your_token_here
-   OWNER_ID=your_id_here
-   ```
-
-4. **Run the Bot**
-   ```bash
-   python main.py
-   ```
-
-### 🐛 Common Issues
-
-1. **Bot Won't Start**
-   - Check your `.env` file
-   - Verify Python version (3.11+)
-   - Look in `logs/bot.log`
-
-2. **Commands Not Working**
-   - Check bot permissions
-   - Verify slash commands are synced
-   - Enable required intents
-
-3. **Need More Help?**
-   - Check [Troubleshooting Guide](TROUBLESHOOTING.md)
-   - Join Developer Support in our Discord
-   - Open a GitHub issue
+#### Role Management
+```
+/persistentrole          # Manage persistent roles
+/xprole                  # Manage XP-based roles
+```
 
 ## 📚 Next Steps
 
-- Read the [User Guide](USER_GUIDE.md)
-- Check [Admin Guide](ADMIN_GUIDE.md) for advanced setup
-- Join our [Support Server](https://discord.gg/XcH8JmGaHZ)
-- Star us on [GitHub](https://github.com/apifinyyy/strwbrry_jam_bot)
+1. **Customize Your Server**
+   - Configure audit logging with `/setauditlog`
+   - Set up role management with `/persistentrole` and `/xprole`
+   - Review server settings with `/serverinfo`
 
----
-Remember: The bot is designed to be user-friendly! If something isn't clear, let us know!
+2. **Learn the Features**
+   - [User Guide](USER_GUIDE.md)
+   - Type `/help` for detailed help
+   - Join our [Support Server](https://discord.gg/XcH8JmGaHZ)
+
+3. **Engage Your Community**
+   - Set up economy system
+   - Configure moderation tools
+   - Use utility commands
+
+## 🆘 Need Help?
+
+- Use `/help` for command information
+- Check our [FAQ](USER_GUIDE.md#faq)
+- Join our [Support Server](https://discord.gg/XcH8JmGaHZ)
+- Read the [Troubleshooting Guide](ADMIN_GUIDE.md#troubleshooting)
+
+## 🔒 Permissions
+
+The bot needs these permissions to function properly:
+- Administrator (recommended)
+- Or these specific permissions:
+  - Manage Roles
+  - Manage Channels
+  - Kick/Ban Members
+  - Manage Messages
+  - View Channels
+  - Send Messages
+  - Embed Links
+  - Attach Files
+  - Add Reactions
+  - Use External Emojis
+  - Manage Webhooks

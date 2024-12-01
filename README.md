@@ -2,87 +2,84 @@
 
 A powerful, user-friendly Discord bot that makes server management fun and easy! Built with discord.py.
 
+[![Discord Server](https://img.shields.io/discord/1234567890?color=7289da&logo=discord&logoColor=white)](https://discord.gg/XcH8JmGaHZ)
 ![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![discord.py Version](https://img.shields.io/badge/discord.py-2.3.2+-blue.svg)
 ![License](https://img.shields.io/github/license/apifinyyy/strwbrry_jam_bot)
 
-## 🌟 What Can This Bot Do?
+[Invite Bot](https://discord.com/oauth2/authorize?client_id=1234567890&permissions=8&scope=bot%20applications.commands) | [Support Server](https://discord.gg/XcH8JmGaHZ) | [Documentation](https://github.com/apifinyyy/strwbrry_jam_bot/wiki) | [Getting Started](docs/GETTING_STARTED.md)
 
-### 👥 Social Features
-- **Profile System**: Customizable profiles with themes
-- **Economy**: Shop, trade, and earn virtual currency
-- **XP System**: Gain levels and earn role rewards
-- **Achievements**: Track your accomplishments
+## ✨ Features
 
-### 🎮 Fun & Games
-- **Mini-games**: Rock Paper Scissors, Trivia, and more!
-- **Gambling**: Try your luck with fair odds
-- **Word Games**: Test your vocabulary
-- **Leaderboards**: Compete with friends
+### 🛡️ Moderation & Management
+- **Advanced Moderation**: Warnings, mutes, bans with logging
+- **Auto-Moderation**: Spam protection, word filters, raid protection
+- **Logging**: Track messages, members, roles, and more
+- **Support Tickets**: Help desk system with categories
 
-### 🛡️ Server Management Made Easy
-- **Simple Moderation**: Warnings, mutes, bans
-- **Support Tickets**: Help your members effectively
-- **Auto-moderation**: Keep your server safe
-- **Detailed Logs**: Track what's happening
+### 🎮 Fun & Engagement
+- **Economy System**: Currency, shop, trading
+- **XP & Levels**: Gain XP from chat and voice
+- **Mini-games**: Trivia, math challenges, word games
+- **Leaderboards**: Server-wide competitions
 
-### 🤖 Helpful Tools
-- **Welcome Messages**: Greet new members
-- **Role Management**: Auto-roles and reaction roles
-- **Server Stats**: Track your growth
-- **Polls & Reminders**: Engage your community
+### 🤖 Automation
+- **Welcome System**: Customizable welcome messages
+- **Auto-Roles**: Role assignment on join
+- **Reaction Roles**: Self-assign roles
+- **Scheduled Messages**: Announcements & reminders
 
-## 🚀 Get Started in 5 Minutes
+## 🚀 Quick Start
 
-1. **Invite the Bot**
-   - [Click here to invite Strwbrry Jam to your server](https://discord.com/oauth2/authorize?...)
-   - Select your server and click "Authorize"
+1. **[Invite the Bot](https://discord.com/oauth2/authorize?client_id=1234567890&permissions=8&scope=bot%20applications.commands)**
+2. **Run** `/setup`
+3. **Type** `/` to see all commands
 
-2. **Quick Setup**
-   ```
-   /setup quickstart  # Run the quick setup wizard
-   /help             # See all commands
-   ```
+## 📚 Documentation
 
-3. **That's it!** The bot is ready to use with sensible defaults.
+- [🌟 Getting Started](docs/GETTING_STARTED.md)
+- [📖 User Guide](docs/USER_GUIDE.md)
+- [⚙️ Configuration](docs/CONFIGURATION.md)
+- [👑 Admin Guide](docs/ADMIN_GUIDE.md)
+- [📋 Setup Checklist](docs/SETUP_CHECKLIST.md)
+- [🔧 API Reference](docs/API.md)
 
-## 📚 Need Help?
+## 💬 Support & Community
 
-- Type `/help` to see all commands
-- Visit our [Support Server](https://discord.gg/XcH8JmGaHZ)
-- Check the [User Guide](docs/USER_GUIDE.md)
-- Read the [FAQ](docs/USER_GUIDE.md#faq)
+- [Join Our Discord](https://discord.gg/XcH8JmGaHZ)
+- [Report a Bug](https://github.com/apifinyyy/strwbrry_jam_bot/issues)
+- [Suggest a Feature](https://github.com/apifinyyy/strwbrry_jam_bot/issues/new?labels=enhancement)
 
-## 🛠️ For Developers
+## 🛠️ Self-Hosting
 
-Want to host your own instance or contribute?
-
-1. **Quick Setup**
+1. **Clone & Install**
    ```bash
    git clone https://github.com/apifinyyy/strwbrry_jam_bot.git
    cd strwbrry_jam_bot
    python -m venv venv
    source venv/bin/activate  # or .\venv\Scripts\activate on Windows
    pip install -r requirements.txt
-   # Copy .env.example to .env and edit it
+   ```
+
+2. **Configure**
+   - Copy `.env.example` to `.env`
+   - Add your Discord bot token
+   - Configure other settings as needed
+
+3. **Run**
+   ```bash
    python main.py
    ```
 
-2. **Documentation**
-   - [Getting Started Guide](docs/GETTING_STARTED.md)
-   - [Contributing Guide](CONTRIBUTING.md)
-   - [API Reference](docs/API.md)
+## 🤝 Contributing
 
-## ❤️ Support the Project
-
-- ⭐ Star this repository
-- 🐛 Report bugs and suggest features
-- 🤝 Contribute code or documentation
-- 🌟 Share with your friends
+- [Contributing Guidelines](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Development Setup](docs/DEVELOPER_GUIDE.md)
 
 ## 📝 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
 
 ---
 Made with ❤️ by the Strwbrry Jam team

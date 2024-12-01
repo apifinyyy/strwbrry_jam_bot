@@ -1,131 +1,282 @@
-# Strwbrry Jam Bot API Documentation
+# 🔌 API Documentation
 
-## Core Systems
+Complete API reference for Strwbrry Jam Bot's commands and features.
 
-### Data Manager
-The `DataManager` class handles all data persistence operations.
+## 🔗 Quick Links
+- [Support Server](https://discord.gg/XcH8JmGaHZ)
+- [Invite Bot](https://discord.com/api/oauth2/authorize?client_id=1310455349131608096&permissions=1644971949559&scope=bot%20applications.commands)
+- [Configuration Guide](CONFIGURATION.md)
+- [Admin Guide](ADMIN_GUIDE.md)
 
-#### Methods
-- `get_user_profile(user_id: int) -> dict`
-  - Retrieves a user's profile data
-  - Returns `None` if no profile exists
+## 📚 Command Categories
 
-- `update_user_profile(user_id: int, updates: dict) -> None`
-  - Updates a user's profile with new data
-  - Creates profile if it doesn't exist
+### 🛡️ Moderation Commands
 
-- `add_user_badge(user_id: int, badge_id: str) -> None`
-  - Adds a badge to user's profile
-  - Silently fails if badge already exists
+#### Warning System
+```python
+/warn <user> [reason]
+# Issue a warning to a user
+# Parameters:
+# - user: @mention or ID (required)
+# - reason: Text (optional)
+# Returns: Warning confirmation
 
-- `remove_user_badge(user_id: int, badge_id: str) -> None`
-  - Removes a badge from user's profile
-  - Silently fails if badge doesn't exist
+/warnings <user>
+# View user's warnings
+# Parameters:
+# - user: @mention or ID (required)
+# Returns: List of warnings
 
-### Config Manager
-The `ConfigManager` class manages server-specific configurations.
-
-#### Methods
-- `get_guild_config(guild_id: int) -> Dict[str, Any]`
-  - Returns full configuration for a guild
-  - Creates default config if none exists
-
-- `set_guild_config(guild_id: int, config: Dict[str, Any]) -> None`
-  - Updates entire guild configuration
-  - Validates against schema before saving
-
-- `get_value(guild_id: int, *keys: str, default: Any = None) -> Any`
-  - Gets specific configuration value using dot notation
-  - Returns default if key doesn't exist
-
-- `set_value(guild_id: int, value: Any, *keys: str) -> None`
-  - Sets specific configuration value using dot notation
-  - Creates intermediate dictionaries as needed
-
-## Cog Features
-
-### Social Cog
-Profile customization and social features.
-
-#### Commands
-- `/profile [user]`
-  - Shows user's profile card
-  - Parameters:
-    - user (optional): User to view profile of
-  - Returns: Custom profile card image
-
-- `/settheme <theme>`
-  - Changes profile theme
-  - Parameters:
-    - theme: One of ["default", "night", "sunset"]
-  - Returns: Success/failure message
-
-- `/setbio <bio>`
-  - Sets profile bio
-  - Parameters:
-    - bio: New bio text (max 100 chars)
-  - Returns: Success/failure message
-
-- `/settitle <title>`
-  - Sets profile custom title
-  - Parameters:
-    - title: New title (max 30 chars)
-  - Returns: Success/failure message
-
-### Utility Cog
-General utility features.
-
-#### Commands
-- `/poll <title> <options> [duration] [blind]`
-  - Creates a poll
-  - Parameters:
-    - title: Poll question
-    - options: Options separated by |
-    - duration (optional): Poll duration in minutes
-    - blind (optional): Hide results until end
-  - Returns: Interactive poll message
-
-- `/giveaway <prize> <duration> [winners] [requirement]`
-  - Starts a giveaway
-  - Parameters:
-    - prize: What to give away
-    - duration: How long to run for
-    - winners (optional): Number of winners
-    - requirement (optional): Entry requirement
-  - Returns: Interactive giveaway message
-
-## Database Schema
-
-### user_profiles
-```sql
-CREATE TABLE user_profiles (
-    user_id BIGINT PRIMARY KEY,
-    profile_data JSONB DEFAULT '{}'::jsonb
-)
+/delwarn <user> <warn_id>
+# Delete a warning
+# Parameters:
+# - user: @mention or ID (required)
+# - warn_id: Warning ID (required)
+# Returns: Deletion confirmation
 ```
 
-### guild_settings
-```sql
-CREATE TABLE guild_settings (
-    guild_id BIGINT PRIMARY KEY,
-    poll_settings JSONB DEFAULT '{}'::jsonb,
-    giveaway_settings JSONB DEFAULT '{}'::jsonb
-)
+#### Auto-Moderation
+```python
+/automod <action> <feature>
+# Manage auto-moderation features
+# Parameters:
+# - action: enable/disable/config (required)
+# - feature: spam/links/caps/mentions (required)
+# Returns: Configuration status
+
+/automod threshold <feature> <value>
+# Set auto-mod thresholds
+# Parameters:
+# - feature: spam/mentions/caps (required)
+# - value: Number (required)
+# Returns: Updated threshold
 ```
 
-## Error Handling
-All commands implement the following error handling:
-- Invalid input validation with helpful messages
-- Database connection errors with retry logic
-- Permission errors with clear explanations
-- Rate limit notifications
-- General error fallbacks
+### 💰 Economy Commands
 
-## Events
-The bot handles these Discord events:
-- on_ready: Bot startup
-- on_guild_join: Server join setup
-- on_guild_remove: Server leave cleanup
-- on_command_error: Command error handling
-- on_message: Message processing
-- on_reaction_add: Reaction handling
+#### Currency Management
+```python
+/balance [user]
+# Check balance
+# Parameters:
+# - user: @mention or ID (optional)
+# Returns: Current balance
+
+/daily
+# Claim daily reward
+# Parameters: None
+# Returns: Reward amount
+
+/weekly
+# Claim weekly reward
+# Parameters: None
+# Returns: Reward amount
+
+/transfer <user> <amount>
+# Transfer currency
+# Parameters:
+# - user: @mention or ID (required)
+# - amount: Number (required)
+# Returns: Transfer confirmation
+```
+
+#### Shop System
+```python
+/shop
+# View shop items
+# Parameters: None
+# Returns: List of items
+
+/buy <item>
+# Purchase item
+# Parameters:
+# - item: Item name/ID (required)
+# Returns: Purchase confirmation
+
+/inventory [user]
+# View inventory
+# Parameters:
+# - user: @mention or ID (optional)
+# Returns: Inventory contents
+```
+
+### ⭐ XP & Leveling
+
+```python
+/rank [user]
+# View rank card
+# Parameters:
+# - user: @mention or ID (optional)
+# Returns: Rank card embed
+
+/leaderboard [page]
+# View XP leaderboard
+# Parameters:
+# - page: Number (optional)
+# Returns: Leaderboard page
+
+/xp info
+# View XP system info
+# Parameters: None
+# Returns: XP rates and rewards
+```
+
+### 🎮 Mini-Games
+
+```python
+/trivia [category]
+# Start trivia game
+# Parameters:
+# - category: Game category (optional)
+# Returns: Trivia question
+
+/rps <choice>
+# Play Rock Paper Scissors
+# Parameters:
+# - choice: rock/paper/scissors (required)
+# Returns: Game result
+
+/math
+# Start math game
+# Parameters: None
+# Returns: Math problem
+```
+
+### 🎫 Ticket System
+
+```python
+/ticket create [reason]
+# Create support ticket
+# Parameters:
+# - reason: Text (optional)
+# Returns: New ticket channel
+
+/ticket close [reason]
+# Close ticket
+# Parameters:
+# - reason: Text (optional)
+# Returns: Close confirmation
+
+/ticket add <user>
+# Add user to ticket
+# Parameters:
+# - user: @mention or ID (required)
+# Returns: Add confirmation
+```
+
+### 👋 Welcome System
+
+```python
+/welcome test
+# Test welcome message
+# Parameters: None
+# Returns: Welcome message preview
+
+/goodbye test
+# Test goodbye message
+# Parameters: None
+# Returns: Goodbye message preview
+```
+
+## 📊 Event Webhooks
+
+### Available Events
+```json
+{
+  "member_join": {
+    "user": "User object",
+    "guild": "Guild object",
+    "timestamp": "ISO timestamp"
+  },
+  "member_leave": {
+    "user": "User object",
+    "guild": "Guild object",
+    "timestamp": "ISO timestamp"
+  },
+  "message_delete": {
+    "message": "Message object",
+    "channel": "Channel object",
+    "timestamp": "ISO timestamp"
+  }
+}
+```
+
+### Webhook Format
+```json
+{
+  "type": "event_type",
+  "data": {
+    // Event specific data
+  },
+  "timestamp": "ISO timestamp",
+  "guild_id": "Guild ID"
+}
+```
+
+## 🔒 Permission Levels
+
+### User Levels
+1. **User** (Level 0)
+   - Basic commands
+   - Game participation
+   - Economy features
+
+2. **Moderator** (Level 1)
+   - Warning management
+   - Ticket handling
+   - Auto-mod config
+
+3. **Administrator** (Level 2)
+   - Full configuration
+   - Economy management
+   - Bot customization
+
+4. **Owner** (Level 3)
+   - Server settings
+   - Permission management
+   - Advanced features
+
+## 🛠️ Rate Limits
+
+### Command Limits
+- General commands: 5/5s
+- Economy commands: 3/5s
+- Game commands: 1/10s
+- Moderation commands: 10/10s
+
+### Feature Limits
+- Tickets: 1 per user
+- Daily reward: 24h cooldown
+- Weekly reward: 7d cooldown
+- XP gain: 60s cooldown
+
+## 📝 Response Formats
+
+### Success Response
+```json
+{
+  "success": true,
+  "data": {
+    // Command specific data
+  },
+  "message": "Success message"
+}
+```
+
+### Error Response
+```json
+{
+  "success": false,
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Error description"
+  }
+}
+```
+
+## ❓ Need Help?
+
+- Join our [Support Server](https://discord.gg/XcH8JmGaHZ)
+- Check [Configuration Guide](CONFIGURATION.md)
+- Review [Admin Guide](ADMIN_GUIDE.md)
+- Use `/help` for command help
