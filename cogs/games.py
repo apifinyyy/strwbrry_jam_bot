@@ -28,9 +28,18 @@ class Games(commands.Cog):
                 "hard": 150
             },
             "chat_amount": 25,         # Amount for Chat challenges
+            "gamble_amount": {         # Amount for gambling
+                "min": 50,            # Minimum bet
+                "max": 1000          # Maximum bet
+            },
+            "gamble_win_chance": 0.4,  # 40% chance to win
+            "gamble_multiplier": 2.0,  # Win multiplier
             "cooldown": 60,            # Cooldown between games in seconds
             "max_daily_rewards": 500,  # Maximum daily rewards from games
-            "enabled_games": ["rps", "trivia", "math", "chat"]  # List of enabled games
+            "enabled_games": ["rps", "trivia", "math", "chat", "gamble"],  # List of enabled games
+            "chat_timeout": 60,        # Timeout for chat challenges in seconds
+            "chat_min_length": 5,      # Minimum length for chat challenge text
+            "chat_max_length": 10      # Maximum length for chat challenge text
         }
         
         # Initialize logging
@@ -97,11 +106,11 @@ class Games(commands.Cog):
     async def get_config(self, guild_id: str) -> dict:
         """Get the games configuration for a guild with error handling"""
         try:
-            config = await self.bot.data_manager.load_json("games", self.games_key)
-            if guild_id not in config:
-                config[guild_id] = self.default_config.copy()
-                await self.bot.data_manager.save_json("games", self.games_key, config)
-            return config[guild_id]
+            config = self.bot.data_manager.load_data(guild_id, "games")
+            if not config or self.games_key not in config:
+                config = {self.games_key: {guild_id: self.default_config.copy()}}
+                self.bot.data_manager.save_data(guild_id, "games", config)
+            return config[self.games_key][guild_id]
         except Exception as e:
             self.logger.error(f"Error loading game config: {e}")
             return self.default_config.copy()
@@ -109,16 +118,16 @@ class Games(commands.Cog):
     async def update_config(self, guild_id: str, setting: str, value: any) -> bool:
         """Update a specific game configuration setting with validation"""
         try:
-            config = await self.bot.data_manager.load_json("games", self.games_key)
-            if guild_id not in config:
-                config[guild_id] = self.default_config.copy()
+            config = self.bot.data_manager.load_data(guild_id, "games")
+            if not config or self.games_key not in config:
+                config = {self.games_key: {guild_id: self.default_config.copy()}}
             
             # Validate setting exists
-            if setting not in config[guild_id]:
+            if setting not in config[self.games_key][guild_id]:
                 raise ValueError(f"Invalid setting: {setting}")
             
-            config[guild_id][setting] = value
-            await self.bot.data_manager.save_json("games", self.games_key, config)
+            config[self.games_key][guild_id][setting] = value
+            self.bot.data_manager.save_data(guild_id, "games", config)
             return True
         except Exception as e:
             self.logger.error(f"Error updating game config: {e}")
@@ -363,62 +372,98 @@ class Games(commands.Cog):
         # Select random question based on difficulty
         question_data = random.choice(self.trivia_questions[difficulty])
         
-        embed = discord.Embed(
-            title="🎯 Trivia Time!",
-            description=f"**Difficulty**: {difficulty.capitalize()}\n**Question**: {question_data['question']}\n\nYou have 30 seconds to answer!",
-            color=discord.Color.blue()
-        )
-        embed.add_field(
-            name="Reward",
-            value=f"🪙 {config['trivia_amount'][difficulty]} coins"
-        )
+        # Add user to active games
+        user_key = f"{interaction.guild_id}:{interaction.user.id}"
+        self.active_games.add(user_key)
         
-        await interaction.response.send_message(embed=embed)
-
-        def check(m):
-            return m.author == interaction.user and m.channel == interaction.channel
-
         try:
-            message = await self.bot.wait_for('message', timeout=30.0, check=check)
+            embed = discord.Embed(
+                title="🎯 Trivia Time!",
+                description=f"**Difficulty**: {difficulty.capitalize()}\n**Question**: {question_data['question']}\n\nYou have 30 seconds to answer!",
+                color=discord.Color.blue()
+            )
+            embed.add_field(
+                name="Reward",
+                value=f"🪙 {config['trivia_amount'][difficulty]} coins"
+            )
             
-            if message.content.lower() == question_data['answer'].lower():
-                # Award coins based on difficulty
-                reward = config['trivia_amount'][difficulty]
-                
-                user_data = await self.bot.economy_cog._get_user_data(interaction.guild_id, interaction.user.id)
-                user_data['balance'] += reward
-                await self.bot.economy_cog._save_user_data(interaction.guild_id, interaction.user.id, user_data)
-                
-                await interaction.channel.send(
-                    f"✅ Correct! You won {reward} 🪙\n"
-                    f"Your answer: {message.content}"
-                )
-            else:
-                await interaction.channel.send(
-                    f"❌ Wrong answer!\n"
-                    f"Your answer: {message.content}\n"
-                    f"Correct answer: {question_data['answer']}"
-                )
-        
-        except asyncio.TimeoutError:
-            await interaction.channel.send("⏰ Time's up! The correct answer was: " + question_data['answer'])
+            await interaction.response.send_message(embed=embed)
 
-        # Update cooldown
-        self.last_game[str(interaction.user.id)] = datetime.now()
+            def check(m):
+                # Allow any message from the user in the same channel
+                return (
+                    m.author.id == interaction.user.id and 
+                    m.channel.id == interaction.channel_id and
+                    not m.author.bot
+                )
 
-        # Update user stats
-        await self.update_user_stats(interaction.guild_id, interaction.user.id, "trivia", config['trivia_amount'][difficulty])
+            try:
+                message = await self.bot.wait_for('message', timeout=30.0, check=check)
+                
+                # Normalize both answers for comparison
+                user_answer = message.content.lower().strip()
+                correct_answer = question_data['answer'].lower().strip()
+                
+                # Case-insensitive answer checking
+                if user_answer == correct_answer:
+                    # Award coins based on difficulty
+                    reward = config['trivia_amount'][difficulty]
+                    
+                    try:
+                        # Get economy cog
+                        economy_cog = self.bot.get_cog('Economy')
+                        if not economy_cog:
+                            await interaction.channel.send("❌ Economy system is not available right now. Please try again later.")
+                            return
+                            
+                        # Get and update user data
+                        user_data = economy_cog._get_user_data(interaction.guild_id, interaction.user.id)
+                        user_data['balance'] += reward
+                        economy_cog._save_user_data(interaction.guild_id, interaction.user.id, user_data)
+                        
+                        await interaction.channel.send(
+                            f"✅ Correct! You won {reward} 🪙\n"
+                            f"Your answer: {message.content}"
+                        )
+                    except Exception as e:
+                        self.logger.error(f"Error handling trivia reward: {e}")
+                        await interaction.channel.send("❌ Error giving reward. The answer was correct but there was a problem with the economy system.")
+                else:
+                    # Show both answers for debugging
+                    await interaction.channel.send(
+                        f"❌ Wrong answer!\n"
+                        f"Your answer: '{message.content}'\n"
+                        f"Correct answer: '{question_data['answer']}'"
+                    )
+                
+            except asyncio.TimeoutError:
+                await interaction.channel.send("⏰ Time's up! The correct answer was: " + question_data['answer'])
+
+            # Update cooldown with correct user key
+            self.last_game[user_key] = datetime.now()
+
+            # Update user stats if they won
+            if message.content.lower().strip() == question_data['answer'].lower().strip():
+                await self.update_user_stats(interaction.guild_id, interaction.user.id, "trivia", config['trivia_amount'][difficulty])
+                
+        finally:
+            # Always remove user from active games, even if an error occurs
+            self.active_games.discard(user_key)
 
     @trivia.error
     async def trivia_error(self, interaction: discord.Interaction, error):
+        # Log the full error for debugging
+        self.logger.error(f"Trivia command error: {str(error)}")
+        
         if isinstance(error, app_commands.CommandOnCooldown):
             await interaction.response.send_message(
                 f"⏰ You can play trivia again in {int(error.retry_after)} seconds.",
                 ephemeral=True
             )
         else:
+            # More detailed error message
             await interaction.response.send_message(
-                "❌ An error occurred while processing the command.",
+                f"❌ An error occurred while processing the command: {str(error)}",
                 ephemeral=True
             )
 
@@ -513,144 +558,302 @@ class Games(commands.Cog):
             )
 
     @app_commands.command(name="startchallenge", description="Start a random chat challenge")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def start_chat_challenge(self, interaction: discord.Interaction):
+    @app_commands.describe(
+        difficulty="Choose difficulty level (easy/medium/hard)",
+        timeout="Challenge timeout in seconds (30-300)"
+    )
+    async def start_chat_challenge(
+        self,
+        interaction: discord.Interaction,
+        difficulty: Literal["easy", "medium", "hard"] = "medium",
+        timeout: app_commands.Range[int, 30, 300] = 60
+    ):
         """Start a random chat challenge for coins."""
         try:
-            if interaction.channel_id in self.active_chat_challenges:
+            # Check if game is enabled
+            config = await self.get_config(str(interaction.guild_id))
+            if "chat" not in config["enabled_games"]:
+                await interaction.response.send_message(
+                    "❌ Chat challenges are currently disabled on this server.",
+                    ephemeral=True
+                )
+                return
+
+            # Check for active challenge
+            if interaction.channel.id in self.active_chat_challenges:
                 await interaction.response.send_message(
                     "🚫 There's already an active challenge in this channel!",
                     ephemeral=True
                 )
                 return
 
-            # Generate random string
-            length = random.randint(5, 10)
-            chars = string.ascii_letters + string.digits
+            # Generate challenge text based on difficulty
+            length_ranges = {
+                "easy": (5, 7),
+                "medium": (8, 12),
+                "hard": (13, 15)
+            }
+            min_len, max_len = length_ranges[difficulty]
+            length = random.randint(min_len, max_len)
+            
+            # Generate text with appropriate character set
+            char_sets = {
+                "easy": string.ascii_lowercase + string.digits,
+                "medium": string.ascii_letters + string.digits,
+                "hard": string.ascii_letters + string.digits + string.punctuation
+            }
+            chars = char_sets[difficulty]
             challenge_text = ''.join(random.choice(chars) for _ in range(length))
             
+            # Calculate reward based on difficulty
+            rewards = {
+                "easy": config["chat_amount"],
+                "medium": config["chat_amount"] * 2,
+                "hard": config["chat_amount"] * 3
+            }
+            reward = rewards[difficulty]
+
+            # Create challenge embed
             embed = discord.Embed(
                 title="🎉 Chat Challenge!",
-                description=f"First person to type this text wins:\n`{challenge_text}`",
+                description=(
+                    f"**Difficulty**: {difficulty.capitalize()}\n"
+                    f"**Time Limit**: {timeout} seconds\n\n"
+                    f"First person to type this text exactly wins:\n"
+                    f"```{challenge_text}```"
+                ),
                 color=discord.Color.gold()
             )
+            embed.set_footer(text=f"Prize: 🪙 {reward:,} coins")
             
-            winnings = self.get_winnable_amount(interaction.guild_id, "chat")
-            embed.set_footer(text=f"Prize: {winnings} coins")
-            
-            self.active_chat_challenges[interaction.channel_id] = {
+            # Store challenge data
+            self.active_chat_challenges[interaction.channel.id] = {
                 'text': challenge_text,
-                'winnings': winnings
+                'winnings': reward,
+                'start_time': datetime.now(),
+                'timeout': timeout,
+                'difficulty': difficulty
             }
             
+            # Send challenge message
             await interaction.response.send_message(embed=embed)
             
+            # Start timeout task
+            self.bot.loop.create_task(
+                self._handle_challenge_timeout(interaction.channel.id, timeout)
+            )
+            
         except Exception as e:
+            self.logger.error(f"Error in start chat challenge command: {e}")
             await interaction.response.send_message(
                 "❌ An error occurred while starting the chat challenge. Please try again.",
                 ephemeral=True
             )
-            print(f"Error in start chat challenge command: {str(e)}")
+
+    async def _handle_challenge_timeout(self, channel_id: int, timeout: int):
+        """Handle challenge timeout"""
+        try:
+            await asyncio.sleep(timeout)
+            if channel_id in self.active_chat_challenges:
+                challenge = self.active_chat_challenges[channel_id]
+                channel = self.bot.get_channel(channel_id)
+                if channel:
+                    embed = discord.Embed(
+                        title="⏰ Challenge Expired!",
+                        description=(
+                            f"Time's up! Nobody completed the challenge.\n"
+                            f"The text was: `{challenge['text']}`"
+                        ),
+                        color=discord.Color.red()
+                    )
+                    await channel.send(embed=embed)
+                del self.active_chat_challenges[channel_id]
+        except Exception as e:
+            self.logger.error(f"Error in challenge timeout handler: {e}")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot or not message.guild:
-            return
+        """Handle chat challenge responses"""
+        try:
+            # Ignore bot messages and DMs
+            if message.author.bot or not message.guild:
+                return
 
-        if message.channel.id in self.active_chat_challenges:
+            # Check for active challenge
+            if message.channel.id not in self.active_chat_challenges:
+                return
+
             challenge = self.active_chat_challenges[message.channel.id]
-            if message.content == challenge['text']:
-                # Winner found!
-                user_data = self._get_user_data(message.guild.id, message.author.id)
-                user_data["balance"] += challenge['winnings']
-                self._save_user_data(message.guild.id, message.author.id, user_data)
-                
-                embed = discord.Embed(
-                    title="🎉 Challenge Complete!",
-                    description=f"{message.author.mention} won {challenge['winnings']} coins!",
-                    color=discord.Color.green()
-                )
-                embed.add_field(
-                    name="New Balance",
-                    value=f"🪙 {user_data['balance']:,} coins"
-                )
-                
-                await message.channel.send(embed=embed)
+            
+            # Check if challenge has timed out
+            time_elapsed = (datetime.now() - challenge['start_time']).total_seconds()
+            if time_elapsed > challenge['timeout']:
                 del self.active_chat_challenges[message.channel.id]
+                return
 
-                # Update user stats
-                await self.update_user_stats(message.guild.id, message.author.id, "chat", challenge['winnings'])
+            # Check answer
+            if message.content == challenge['text']:
+                try:
+                    # Get economy cog
+                    economy_cog = self.bot.get_cog('Economy')
+                    if not economy_cog:
+                        await message.channel.send("❌ Economy system is not available right now. Please try again later.")
+                        return
+                        
+                    # Get and update user data
+                    user_data = economy_cog._get_user_data(message.guild.id, message.author.id)
+                    user_data["balance"] += challenge['winnings']
+                    if not economy_cog._save_user_data(message.guild.id, message.author.id, user_data):
+                        await message.channel.send("❌ Error saving reward. Please contact an admin.")
+                        return
+                    
+                    # Create success embed
+                    embed = discord.Embed(
+                        title="🎉 Challenge Complete!",
+                        description=(
+                            f"**Winner**: {message.author.mention}\n"
+                            f"**Difficulty**: {challenge['difficulty'].capitalize()}\n"
+                            f"**Time**: {time_elapsed:.1f}s"
+                        ),
+                        color=discord.Color.green()
+                    )
+                    embed.add_field(
+                        name="Reward",
+                        value=f"🪙 {challenge['winnings']:,} coins"
+                    )
+                    embed.add_field(
+                        name="New Balance",
+                        value=f"🪙 {user_data['balance']:,} coins"
+                    )
+                    
+                    await message.channel.send(embed=embed)
+                    
+                    # Update user stats
+                    await self.update_user_stats(
+                        message.guild.id,
+                        message.author.id,
+                        "chat",
+                        challenge['winnings']
+                    )
+                    
+                finally:
+                    # Always clean up the challenge
+                    del self.active_chat_challenges[message.channel.id]
+            
+        except Exception as e:
+            self.logger.error(f"Error in chat challenge handler: {e}")
+            try:
+                await message.channel.send(
+                    "❌ An error occurred while processing the challenge. The challenge has been cancelled."
+                )
+            finally:
+                # Ensure cleanup happens even if error message fails
+                if message.channel.id in self.active_chat_challenges:
+                    del self.active_chat_challenges[message.channel.id]
 
     @app_commands.command(name="gamble", description="Gamble your coins")
-    @app_commands.checks.cooldown(1, 30)  # 30 seconds cooldown
-    async def gamble(self, interaction: discord.Interaction, amount: int):
+    @app_commands.describe(
+        amount="Amount of coins to gamble (50-1000)",
+    )
+    async def gamble(
+        self,
+        interaction: discord.Interaction,
+        amount: app_commands.Range[int, 50, 1000]
+    ):
         """Gamble your coins."""
         try:
+            # Check eligibility
             eligible, message = await self.check_game_eligibility(interaction, "gamble")
             if not eligible:
                 await interaction.response.send_message(message, ephemeral=True)
                 return
 
+            # Get user data and config
+            config = await self.get_config(str(interaction.guild_id))
             user_data = self._get_user_data(interaction.guild_id, interaction.user.id)
-            if amount <= 0:
+
+            # Check bet limits
+            if amount < config["gamble_amount"]["min"] or amount > config["gamble_amount"]["max"]:
                 await interaction.response.send_message(
-                    "🤔 You must gamble at least 1 coin!",
+                    f"🎲 Bet must be between 🪙 {config['gamble_amount']['min']} and 🪙 {config['gamble_amount']['max']}!",
                     ephemeral=True
                 )
                 return
 
+            # Check if user has enough coins
             if user_data["balance"] < amount:
                 await interaction.response.send_message(
-                    "🚫 You don't have enough coins!",
+                    f"❌ You don't have enough coins! You need 🪙 **{amount:,}** but have 🪙 **{user_data['balance']:,}**",
                     ephemeral=True
                 )
                 return
 
-            # 40% chance to win
-            if random.random() < 0.4:
-                winnings = amount * 2
-                user_data["balance"] += amount
-                result = f"You won! +{winnings} coins"
-                color = discord.Color.green()
-            else:
-                user_data["balance"] -= amount
-                result = f"You lost! -{amount} coins"
-                color = discord.Color.red()
+            # Add user to active games
+            user_key = f"{interaction.guild_id}:{interaction.user.id}"
+            self.active_games.add(user_key)
 
-            self._save_user_data(interaction.guild_id, interaction.user.id, user_data)
-            
-            embed = discord.Embed(
-                title="🎲 Gambling Results",
-                description=result,
-                color=color
-            )
-            embed.add_field(
-                name="New Balance",
-                value=f"🪙 {user_data['balance']:,} coins"
-            )
-            
-            await interaction.response.send_message(embed=embed)
-            
-            # Update user stats
-            await self.update_user_stats(interaction.guild_id, interaction.user.id, "gamble", winnings if winnings > 0 else -amount)
+            try:
+                # Roll the dice!
+                win = random.random() < config["gamble_win_chance"]
+                
+                if win:
+                    winnings = int(amount * config["gamble_multiplier"])
+                    user_data["balance"] += winnings - amount  # Subtract bet, add winnings
+                    result = f"🎉 You won! +{winnings:,} coins"
+                    color = discord.Color.green()
+                    net_gain = winnings - amount
+                else:
+                    user_data["balance"] -= amount
+                    result = f"😢 You lost! -{amount:,} coins"
+                    color = discord.Color.red()
+                    net_gain = -amount
+
+                # Save user data
+                if not self._save_user_data(interaction.guild_id, interaction.user.id, user_data):
+                    await interaction.response.send_message(
+                        "❌ Error saving game results. Please try again.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Create result embed
+                embed = discord.Embed(
+                    title="🎲 Gambling Results",
+                    description=result,
+                    color=color
+                )
+                embed.add_field(
+                    name="Bet Amount",
+                    value=f"🪙 {amount:,}",
+                    inline=True
+                )
+                embed.add_field(
+                    name="Net Gain/Loss",
+                    value=f"🪙 {net_gain:,}",
+                    inline=True
+                )
+                embed.add_field(
+                    name="New Balance",
+                    value=f"🪙 {user_data['balance']:,}",
+                    inline=True
+                )
+                
+                await interaction.response.send_message(embed=embed)
+                
+                # Update user stats
+                await self.update_user_stats(interaction.guild_id, interaction.user.id, "gamble", net_gain)
+                
+                # Update last game time
+                self.last_game[user_key] = datetime.now()
+
+            finally:
+                # Always remove user from active games
+                self.active_games.discard(user_key)
             
         except Exception as e:
+            self.logger.error(f"Error in gamble command: {e}")
             await interaction.response.send_message(
                 "❌ An error occurred while gambling. Please try again.",
-                ephemeral=True
-            )
-            print(f"Error in gamble command: {str(e)}")
-
-    @gamble.error
-    async def gamble_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, app_commands.CommandOnCooldown):
-            await interaction.response.send_message(
-                f"⏰ You can gamble again in {int(error.retry_after)} seconds.",
-                ephemeral=True
-            )
-        else:
-            await interaction.response.send_message(
-                "❌ An error occurred while processing the command.",
                 ephemeral=True
             )
 
@@ -666,16 +869,48 @@ class Games(commands.Cog):
         app_commands.Choice(name="Math Reward", value="math_amount"),
         app_commands.Choice(name="Chat Reward", value="chat_amount"),
         app_commands.Choice(name="Game Cooldown", value="cooldown"),
-        app_commands.Choice(name="Max Daily Rewards", value="max_daily_rewards")
+        app_commands.Choice(name="Max Daily Rewards", value="max_daily_rewards"),
+        app_commands.Choice(name="Enable Gambling", value="enable_gambling"),
+        app_commands.Choice(name="Disable Gambling", value="disable_gambling")
     ])
     async def game_config(
         self,
         interaction: discord.Interaction,
         setting: str,
-        value: int
+        value: int = None
     ):
         """Configure game settings"""
         guild_id = str(interaction.guild_id)
+        
+        if setting in ["enable_gambling", "disable_gambling"]:
+            config = await self.get_config(guild_id)
+            if setting == "enable_gambling" and "gamble" not in config["enabled_games"]:
+                config["enabled_games"].append("gamble")
+                await self.update_config(guild_id, "enabled_games", config["enabled_games"])
+                await interaction.response.send_message(
+                    "✅ Gambling has been enabled for this server",
+                    ephemeral=True
+                )
+            elif setting == "disable_gambling" and "gamble" in config["enabled_games"]:
+                config["enabled_games"].remove("gamble")
+                await self.update_config(guild_id, "enabled_games", config["enabled_games"])
+                await interaction.response.send_message(
+                    "✅ Gambling has been disabled for this server",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "✅ No changes needed - gambling was already in the desired state",
+                    ephemeral=True
+                )
+            return
+        
+        if value is None:
+            await interaction.response.send_message(
+                "❌ A value is required for this setting",
+                ephemeral=True
+            )
+            return
         
         if setting.endswith("_amount") and (value < 1 or value > 1000):
             await interaction.response.send_message(
@@ -712,7 +947,7 @@ class Games(commands.Cog):
     async def toggle_game(
         self,
         interaction: discord.Interaction,
-        game: Literal["rps", "trivia", "math", "chat"],
+        game: Literal["rps", "trivia", "math", "chat", "gamble"],
         enabled: bool
     ):
         """Enable or disable specific games"""
@@ -761,7 +996,7 @@ class Games(commands.Cog):
         
         # Game Status
         enabled_games = "\n".join(f"✅ {game.upper()}" for game in config["enabled_games"])
-        disabled_games = "\n".join(f"❌ {game.upper()}" for game in ["rps", "trivia", "math", "chat"] if game not in config["enabled_games"])
+        disabled_games = "\n".join(f"❌ {game.upper()}" for game in ["rps", "trivia", "math", "chat", "gamble"] if game not in config["enabled_games"])
         
         status = enabled_games
         if disabled_games:
@@ -808,6 +1043,8 @@ class Games(commands.Cog):
                 games_info += "🔢 **Math Challenge**\n`/math [difficulty]`\n- Solve math problems\n- Harder problems = bigger rewards\n\n"
             if "chat" in config["enabled_games"]:
                 games_info += "💬 **Chat Challenge**\n`/startchallenge`\n- Type the shown text first to win\n- Quick typing = quick coins!\n\n"
+            if "gamble" in config["enabled_games"]:
+                games_info += "🎲 **Gamble**\n`/gamble [amount]`\n- Bet your coins\n- Win big or lose it all!\n\n"
             
             embed.add_field(
                 name="🎯 Available Games",

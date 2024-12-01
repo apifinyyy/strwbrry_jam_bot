@@ -347,6 +347,42 @@ class DataManager:
             self.logger.error(f"Failed to save JSON data to {data_type}: {str(e)}")
             return False
 
+    async def exists(self, data_type: str, key: str = "default") -> bool:
+        """Check if data exists for a given type and key."""
+        try:
+            file_path = self._get_file_path(data_type, key)
+            return os.path.exists(file_path)
+        except Exception as e:
+            self.logger.error(f"Error checking existence of {data_type}/{key}: {e}")
+            return False
+
+    async def load_json(self, data_type: str, key: str = "default") -> dict:
+        """Load JSON data with error handling."""
+        try:
+            file_path = self._get_file_path(data_type, key)
+            if not os.path.exists(file_path):
+                return {}
+            
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                return json.loads(content) if content else {}
+        except Exception as e:
+            self.logger.error(f"Failed to load JSON data from {data_type}/{key}: {e}")
+            return {}
+
+    async def save_json(self, data_type: str, key: str, data: dict) -> bool:
+        """Save JSON data with error handling."""
+        try:
+            file_path = self._get_file_path(data_type, key)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            
+            async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(data, indent=4))
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to save JSON data to {data_type}/{key}: {e}")
+            return False
+
     def _get_guild_path(self, guild_id: int) -> Path:
         """Get the path for a specific guild's data directory."""
         try:

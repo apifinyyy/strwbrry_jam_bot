@@ -18,8 +18,13 @@ class Social(commands.Cog):
     def __init__(self, bot):
         super().__init__()
         self.bot = bot
-        self.logger = bot.logger.getChild('social')
         self.data_manager = bot.data_manager
+        self.data_type = "social"
+        self.logger = bot.logger.getChild('social')
+        self.marriage_data = {}  # guild_id -> {user_id -> partner_id}
+        self.marriage_proposals = {}  # user_id -> {target_id, timestamp}
+        self.proposal_timeout = 60  # seconds
+        self.marriage_cost = 1000  # coins cost to marry
         self.session = None
         self._profile_cache = {}  # user_id -> (profile_data, timestamp)
         self._cache_ttl = 300  # 5 minutes
@@ -51,6 +56,13 @@ class Social(commands.Cog):
         self.font_path = os.path.join(os.getenv('SYSTEMROOT', ''), 'Fonts', 'arial.ttf')
         if not os.path.exists(self.font_path):
             self.font_path = os.path.join(os.getenv('SYSTEMROOT', ''), 'Fonts', 'segoeui.ttf')
+        self.rep_cooldowns = {}  # Store reputation cooldowns
+        self.default_user_data = {
+            "reputation": 0,
+            "given_reputation": 0,
+            "last_rep_given": None,
+            "reputation_received_from": []  # List of user IDs who gave rep
+        }
 
     def _get_user_data(self, guild_id: int, user_id: int) -> dict:
         """Get user data from all relevant systems."""
@@ -80,6 +92,14 @@ class Social(commands.Cog):
                 "balance": 0,
                 "inventory": []
             })
+
+        # Get social data
+        try:
+            social_data = self.bot.data_manager.load_data(guild_id, self.data_type)
+            if str(user_id) in social_data:
+                data.update(social_data[str(user_id)])
+        except FileNotFoundError:
+            data.update(self.default_user_data.copy())
 
         return data
 
@@ -414,17 +434,17 @@ class Social(commands.Cog):
             raise
 
     async def _init_profile_data(self):
-        """Initialize default profile data."""
+        """Initialize profile data"""
         try:
-            if not await self.data_manager.exists('user_profiles'):
-                await self.data_manager.save('user_profiles', 'default', {
-                    'bio': '',
-                    'title': '',
-                    'theme': self.default_themes['default'],
-                    'badges': [],
-                    'created_at': None
-                })
+            # Initialize user profiles if they don't exist
+            if not await self.bot.data_manager.exists('user_profiles'):
+                await self.bot.data_manager.save('user_profiles', 'default', {})
+                self.logger.info("Created user_profiles data structure")
+            
+            # Load existing profiles
+            self._profile_cache = {}  # Reset cache
             self.logger.info("Profile data initialized successfully")
+            
         except Exception as e:
             self.logger.error(f"Failed to initialize profile data: {e}")
             raise
@@ -435,6 +455,273 @@ class Social(commands.Cog):
             await self.session.close()
         self._profile_cache.clear()
         self.logger.info("Social cog unloaded and cleaned up successfully")
+
+    async def _load_marriage_data(self, guild_id: int) -> dict:
+        """Load marriage data for a guild"""
+        try:
+            data = await self.bot.data_manager.load_data(guild_id, self.data_type) or {}
+            if 'marriages' not in data:
+                data['marriages'] = {}
+            return data
+        except Exception as e:
+            self.logger.error(f"Error loading marriage data: {e}")
+            return {'marriages': {}}
+
+    async def _save_marriage_data(self, guild_id: int, data: dict) -> bool:
+        """Save marriage data for a guild"""
+        try:
+            await self.bot.data_manager.save_data(guild_id, self.data_type, data)
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving marriage data: {e}")
+            return False
+
+    async def check_marriage(self, guild_id: int, user_id: int) -> Optional[int]:
+        """Check if a user is married. Returns partner ID if married, None if not."""
+        data = await self._load_marriage_data(guild_id)
+        return data['marriages'].get(str(user_id))
+
+    @social_group.command(name="marry")
+    @app_commands.describe(user="User to propose to")
+    async def marry(self, interaction: discord.Interaction, user: discord.Member):
+        """Propose marriage to another user"""
+        try:
+            # Basic validation
+            if user.id == interaction.user.id:
+                await interaction.response.send_message("💔 You cannot marry yourself!", ephemeral=True)
+                return
+
+            if user.bot:
+                await interaction.response.send_message("💔 You cannot marry a bot!", ephemeral=True)
+                return
+
+            # Check existing marriages
+            data = await self._load_marriage_data(interaction.guild_id)
+            proposer_partner = data['marriages'].get(str(interaction.user.id))
+            target_partner = data['marriages'].get(str(user.id))
+
+            if proposer_partner:
+                partner = interaction.guild.get_member(proposer_partner)
+                partner_mention = partner.mention if partner else "someone"
+                await interaction.response.send_message(
+                    f"💔 You are already married to {partner_mention}!",
+                    ephemeral=True
+                )
+                return
+
+            if target_partner:
+                partner = interaction.guild.get_member(target_partner)
+                partner_mention = partner.mention if partner else "someone"
+                await interaction.response.send_message(
+                    f"💔 {user.mention} is already married to {partner_mention}!",
+                    ephemeral=True
+                )
+                return
+
+            # Check if user has enough coins
+            economy_cog = interaction.client.get_cog("Economy")
+            if economy_cog:
+                user_data = economy_cog._get_user_data(interaction.guild_id, interaction.user.id)
+                if user_data["balance"] < self.marriage_cost:
+                    await interaction.response.send_message(
+                        f"💔 Marriage costs 🪙 {self.marriage_cost:,} coins! You only have 🪙 {user_data['balance']:,}.",
+                        ephemeral=True
+                    )
+                    return
+
+            # Create proposal embed
+            embed = discord.Embed(
+                title="💝 Marriage Proposal",
+                description=(
+                    f"{interaction.user.mention} has proposed to {user.mention}!\n\n"
+                    f"Marriage will cost 🪙 {self.marriage_cost:,} coins.\n"
+                    "The proposal will expire in 60 seconds."
+                ),
+                color=discord.Color.pink()
+            )
+
+            # Create buttons for accept/decline
+            class ProposalView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=60.0)
+                    self.value = None
+
+                @discord.ui.button(label="Accept", style=discord.ButtonStyle.green, emoji="💍")
+                async def accept(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                    if button_interaction.user.id != user.id:
+                        await button_interaction.response.send_message(
+                            "💔 Only the person being proposed to can accept!",
+                            ephemeral=True
+                        )
+                        return
+                    self.value = True
+                    for item in self.children:
+                        item.disabled = True
+                    await button_interaction.response.edit_message(view=self)
+                    self.stop()
+
+                @discord.ui.button(label="Decline", style=discord.ButtonStyle.red, emoji="💔")
+                async def decline(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                    if button_interaction.user.id != user.id:
+                        await button_interaction.response.send_message(
+                            "💔 Only the person being proposed to can decline!",
+                            ephemeral=True
+                        )
+                        return
+                    self.value = False
+                    for item in self.children:
+                        item.disabled = True
+                    await button_interaction.response.edit_message(view=self)
+                    self.stop()
+
+            # Send proposal
+            view = ProposalView()
+            await interaction.response.send_message(embed=embed, view=view)
+
+            # Wait for response
+            await view.wait()
+
+            if view.value is None:
+                timeout_embed = discord.Embed(
+                    title="💔 Proposal Expired",
+                    description="The marriage proposal has timed out.",
+                    color=discord.Color.red()
+                )
+                await interaction.edit_original_response(embed=timeout_embed, view=None)
+            
+            elif view.value:
+                # Deduct coins
+                if economy_cog:
+                    user_data = economy_cog._get_user_data(interaction.guild_id, interaction.user.id)
+                    user_data["balance"] -= self.marriage_cost
+                    economy_cog._save_user_data(interaction.guild_id, interaction.user.id, user_data)
+
+                # Create marriage
+                data['marriages'][str(interaction.user.id)] = user.id
+                data['marriages'][str(user.id)] = interaction.user.id
+                await self._save_marriage_data(interaction.guild_id, data)
+
+                success_embed = discord.Embed(
+                    title="💝 Marriage Successful",
+                    description=(
+                        f"Congratulations to the happy couple!\n"
+                        f"👰‍♀️ {interaction.user.mention} & {user.mention} 🤵‍♂️\n\n"
+                        f"Marriage cost: 🪙 {self.marriage_cost:,} coins"
+                    ),
+                    color=discord.Color.pink()
+                )
+                success_embed.set_footer(text="Use /divorce if you ever need to end the marriage")
+                
+                await interaction.edit_original_response(embed=success_embed, view=None)
+            
+            else:
+                decline_embed = discord.Embed(
+                    title="💔 Proposal Declined",
+                    description=f"{user.mention} has declined the proposal.",
+                    color=discord.Color.red()
+                )
+                await interaction.edit_original_response(embed=decline_embed, view=None)
+
+        except Exception as e:
+            self.logger.error(f"Error in marriage command: {e}")
+            await interaction.response.send_message(
+                "💔 An error occurred with the marriage command. Please try again.",
+                ephemeral=True
+            )
+
+    @social_group.command(name="divorce")
+    async def divorce(self, interaction: discord.Interaction):
+        """Divorce your current partner"""
+        try:
+            # Check if user is married
+            data = await self._load_marriage_data(interaction.guild_id)
+            partner_id = data['marriages'].get(str(interaction.user.id))
+            
+            if not partner_id:
+                await interaction.response.send_message(
+                    "💔 You are not married!",
+                    ephemeral=True
+                )
+                return
+
+            # Get partner
+            partner = interaction.guild.get_member(partner_id)
+            partner_mention = partner.mention if partner else "your partner"
+
+            # Create confirmation embed
+            embed = discord.Embed(
+                title="💔 Divorce Confirmation",
+                description=f"Are you sure you want to divorce {partner_mention}?",
+                color=discord.Color.red()
+            )
+
+            # Create buttons for confirm/cancel
+            class DivorceView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=60.0)
+                    self.value = None
+
+                @discord.ui.button(label="Confirm", style=discord.ButtonStyle.red, emoji="💔")
+                async def confirm(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                    self.value = True
+                    for item in self.children:
+                        item.disabled = True
+                    await button_interaction.response.edit_message(view=self)
+                    self.stop()
+
+                @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey, emoji="❌")
+                async def cancel(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                    self.value = False
+                    for item in self.children:
+                        item.disabled = True
+                    await button_interaction.response.edit_message(view=self)
+                    self.stop()
+
+            # Send confirmation
+            view = DivorceView()
+            await interaction.response.send_message(embed=embed, view=view)
+
+            # Wait for response
+            await view.wait()
+
+            if view.value is None:
+                timeout_embed = discord.Embed(
+                    title="💔 Divorce Cancelled",
+                    description="The divorce request has timed out.",
+                    color=discord.Color.grey()
+                )
+                await interaction.edit_original_response(embed=timeout_embed, view=None)
+
+            elif view.value:
+                # Process divorce
+                if str(interaction.user.id) in data['marriages']:
+                    del data['marriages'][str(interaction.user.id)]
+                if str(partner_id) in data['marriages']:
+                    del data['marriages'][str(partner_id)]
+                
+                await self._save_marriage_data(interaction.guild_id, data)
+
+                divorce_embed = discord.Embed(
+                    title="💔 Divorce Finalized",
+                    description=f"{interaction.user.mention} and {partner_mention} are now divorced.",
+                    color=discord.Color.red()
+                )
+                await interaction.edit_original_response(embed=divorce_embed, view=None)
+
+            else:
+                cancel_embed = discord.Embed(
+                    title="💝 Divorce Cancelled",
+                    description="The divorce has been cancelled.",
+                    color=discord.Color.green()
+                )
+                await interaction.edit_original_response(embed=cancel_embed, view=None)
+
+        except Exception as e:
+            self.logger.error(f"Error in divorce command: {e}")
+            await interaction.response.send_message(
+                "💔 An error occurred with the divorce command. Please try again.",
+                ephemeral=True
+            )
 
     @social_group.command(name="setbio")
     @app_commands.describe(bio="Your new profile bio (max 200 characters)")
@@ -543,173 +830,179 @@ class Social(commands.Cog):
         try:
             # Check if user is trying to rep themselves
             if user.id == interaction.user.id:
-                await interaction.response.send_message("You cannot give reputation to yourself!", ephemeral=True)
+                await interaction.response.send_message(
+                    "❌ You cannot give reputation to yourself!",
+                    ephemeral=True
+                )
                 return
-            
+
+            # Check if user is a bot
+            if user.bot:
+                await interaction.response.send_message(
+                    "❌ You cannot give reputation to bots!",
+                    ephemeral=True
+                )
+                return
+
+            # Get giver's data
+            giver_data = self._get_user_data(interaction.guild_id, interaction.user.id)
+
             # Check cooldown
-            cooldown = await self.data_manager.check_rep_cooldown(interaction.user.id)
-            if cooldown:
-                await interaction.response.send_message(f"You can give reputation again {cooldown}", ephemeral=True)
-                return
-            
-            # Give reputation
-            await self.data_manager.give_rep(interaction.user.id, user.id)
-            
-            # Get updated rep count
-            rep_count = await self.data_manager.get_rep_count(user.id)
-            
-            await interaction.response.send_message(f"You gave +1 reputation to {user.mention}! They now have {rep_count} reputation points.")
+            if giver_data["last_rep_given"]:
+                last_rep = datetime.fromisoformat(giver_data["last_rep_given"])
+                time_since_last = datetime.now() - last_rep
+                if time_since_last < timedelta(hours=24):
+                    time_left = timedelta(hours=24) - time_since_last
+                    hours = int(time_left.total_seconds() // 3600)
+                    minutes = int((time_left.total_seconds() % 3600) // 60)
+                    await interaction.response.send_message(
+                        f"⏰ You can give reputation again in {hours}h {minutes}m",
+                        ephemeral=True
+                    )
+                    return
 
-        except Exception as e:
-            self.logger.error(f"Error giving reputation: {e}", exc_info=True)
-            await interaction.response.send_message("Failed to give reputation. Please try again later.", ephemeral=True)
+            # Get receiver's data
+            receiver_data = self._get_user_data(interaction.guild_id, user.id)
 
-    @social_group.command(name="marry")
-    @app_commands.describe(user="User to propose to")
-    async def marry(self, interaction: discord.Interaction, user: discord.Member):
-        """Propose marriage to another user"""
-        try:
-            # Check if user is trying to marry themselves
-            if user.id == interaction.user.id:
-                await interaction.response.send_message("You cannot marry yourself!", ephemeral=True)
+            # Check if already given rep to this user today
+            if interaction.user.id in receiver_data["reputation_received_from"]:
+                await interaction.response.send_message(
+                    "❌ You have already given reputation to this user!",
+                    ephemeral=True
+                )
                 return
-            
-            # Check if either user is already married
-            proposer_married = await self.data_manager.check_marriage(interaction.user.id)
-            target_married = await self.data_manager.check_marriage(user.id)
-            
-            if proposer_married:
-                await interaction.response.send_message("You are already married!", ephemeral=True)
+
+            # Update receiver's data
+            receiver_data["reputation"] += 1
+            receiver_data["reputation_received_from"].append(interaction.user.id)
+
+            # Update giver's data
+            giver_data["given_reputation"] += 1
+            giver_data["last_rep_given"] = datetime.now().isoformat()
+
+            # Save both users' data
+            if not (self._save_user_data(interaction.guild_id, user.id, receiver_data) and 
+                   self._save_user_data(interaction.guild_id, interaction.user.id, giver_data)):
+                await interaction.response.send_message(
+                    "❌ An error occurred while saving reputation data",
+                    ephemeral=True
+                )
                 return
-                
-            if target_married:
-                await interaction.response.send_message(f"{user.mention} is already married!", ephemeral=True)
-                return
-            
-            # Create proposal embed
+
+            # Send success message with embed
             embed = discord.Embed(
-                title="💍 Marriage Proposal",
-                description=f"{interaction.user.mention} has proposed to {user.mention}!",
-                color=discord.Color.pink()
+                title="⭐ Reputation Given!",
+                description=f"{interaction.user.mention} gave a reputation point to {user.mention}!",
+                color=discord.Color.gold()
             )
-            
-            # Create buttons for accept/decline
-            class ProposalView(discord.ui.View):
-                def __init__(self):
-                    super().__init__(timeout=60.0)
-                    self.value = None
-                
-                @discord.ui.button(label="Accept", style=discord.ButtonStyle.green)
-                async def accept(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                    self.value = True
-                    self.stop()
-                
-                @discord.ui.button(label="Decline", style=discord.ButtonStyle.red)
-                async def decline(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                    self.value = False
-                    self.stop()
-            
-            # Send proposal
-            view = ProposalView()
-            await interaction.response.send_message(embed=embed, view=view)
-            
-            # Wait for response
-            await view.wait()
-            
-            if view.value is None:
-                await interaction.edit_original_response(content="The proposal has timed out.", embed=None, view=None)
-            elif view.value:
-                # Create marriage
-                await self.data_manager.create_marriage(interaction.user.id, user.id)
-                
-                success_embed = discord.Embed(
-                    title="💝 Marriage Successful",
-                    description=f"Congratulations to the happy couple: {interaction.user.mention} and {user.mention}!",
-                    color=discord.Color.pink()
-                )
-                
-                await interaction.edit_original_response(embed=success_embed, view=None)
-            else:
-                decline_embed = discord.Embed(
-                    title="💔 Proposal Declined",
-                    description=f"{user.mention} has declined the proposal.",
-                    color=discord.Color.red()
-                )
-                
-                await interaction.edit_original_response(embed=decline_embed, view=None)
+            embed.add_field(
+                name="New Reputation",
+                value=f"✨ {receiver_data['reputation']} points",
+                inline=True
+            )
+            embed.add_field(
+                name="Total Given",
+                value=f"🎁 {giver_data['given_reputation']} points",
+                inline=True
+            )
+            embed.set_footer(text="You can give reputation again in 24 hours")
+
+            await interaction.response.send_message(embed=embed)
 
         except Exception as e:
-            self.logger.error(f"Error proposing marriage: {e}", exc_info=True)
-            await interaction.response.send_message("Failed to propose marriage. Please try again later.", ephemeral=True)
+            self.logger.error(f"Error in rep command: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while giving reputation",
+                ephemeral=True
+            )
 
-    @social_group.command(name="divorce")
-    async def divorce(self, interaction: discord.Interaction):
-        """Divorce your current partner"""
+    @social_group.command(name="toprep")
+    async def toprep(self, interaction: discord.Interaction):
+        """Display the server's reputation leaderboard"""
         try:
-            # Check if user is married
-            partner_id = await self.data_manager.check_marriage(interaction.user.id)
-            if not partner_id:
-                await interaction.response.send_message("You are not married!", ephemeral=True)
+            data = self.bot.data_manager.load_data(interaction.guild_id, self.data_type)
+            if not data:
+                await interaction.response.send_message(
+                    "❌ No reputation data found for this server!",
+                    ephemeral=True
+                )
                 return
-            
-            # Get partner
-            partner = interaction.guild.get_member(partner_id)
-            
-            # Create confirmation embed
+
+            # Sort users by reputation
+            sorted_users = sorted(
+                [(int(uid), udata["reputation"]) for uid, udata in data.items()],
+                key=lambda x: x[1],
+                reverse=True
+            )[:10]  # Top 10
+
+            if not sorted_users:
+                await interaction.response.send_message(
+                    "❌ No users have received reputation yet!",
+                    ephemeral=True
+                )
+                return
+
             embed = discord.Embed(
-                title="💔 Divorce Confirmation",
-                description="Are you sure you want to proceed with the divorce?",
-                color=discord.Color.red()
+                title="✨ Reputation Leaderboard",
+                color=discord.Color.gold()
             )
+
+            # Add server stats
+            total_rep = sum(udata["reputation"] for udata in data.values())
+            active_users = len([u for u in data.values() if u["reputation"] > 0])
+            embed.description = (
+                f"**Server Stats**\n"
+                f"Total Rep Points: ✨ {total_rep:,}\n"
+                f"Users with Rep: 👥 {active_users:,}\n"
+            )
+
+            # Create leaderboard text
+            medals = ["🥇", "🥈", "🥉"]
+            leaderboard = []
             
-            # Create buttons for confirm/cancel
-            class DivorceView(discord.ui.View):
-                def __init__(self):
-                    super().__init__(timeout=60.0)
-                    self.value = None
-                
-                @discord.ui.button(label="Confirm", style=discord.ButtonStyle.red)
-                async def confirm(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                    self.value = True
-                    self.stop()
-                
-                @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
-                async def cancel(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                    self.value = False
-                    self.stop()
-            
-            # Send confirmation
-            view = DivorceView()
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-            
-            # Wait for response
-            await view.wait()
-            
-            if view.value is None:
-                await interaction.edit_original_response(content="The divorce request has timed out.", embed=None, view=None)
-            elif view.value:
-                # Process divorce
-                await self.data_manager.process_divorce(interaction.user.id, partner_id)
-                
-                divorce_embed = discord.Embed(
-                    title="💔 Divorce Finalized",
-                    description=f"{interaction.user.mention} and {partner.mention} are now divorced.",
-                    color=discord.Color.red()
+            for idx, (user_id, rep) in enumerate(sorted_users, 1):
+                user = interaction.guild.get_member(user_id)
+                if user:
+                    medal = medals[idx-1] if idx <= 3 else f"`{idx}.`"
+                    leaderboard.append(
+                        f"{medal} **{user.display_name}**\n"
+                        f"└ ✨ {rep:,} reputation points"
+                    )
+
+            embed.add_field(
+                name="🏆 Top 10 Most Reputable",
+                value="\n".join(leaderboard) or "No ranked users found",
+                inline=False
+            )
+
+            # Show requester's position if not in top 10
+            if interaction.user.id not in [uid for uid, _ in sorted_users]:
+                user_data = self._get_user_data(interaction.guild_id, interaction.user.id)
+                all_users = sorted(
+                    [(int(uid), udata["reputation"]) for uid, udata in data.items()],
+                    key=lambda x: x[1],
+                    reverse=True
                 )
-                
-                await interaction.edit_original_response(embed=divorce_embed, view=None)
-            else:
-                cancel_embed = discord.Embed(
-                    title="💝 Divorce Cancelled",
-                    description="The divorce has been cancelled.",
-                    color=discord.Color.green()
+                user_position = next(
+                    (idx for idx, (uid, _) in enumerate(all_users, 1) if uid == interaction.user.id),
+                    None
                 )
-                
-                await interaction.edit_original_response(embed=cancel_embed, view=None)
+                if user_position:
+                    embed.add_field(
+                        name="📊 Your Ranking",
+                        value=f"You are ranked #{user_position} with ✨ {user_data['reputation']:,} points",
+                        inline=False
+                    )
+
+            embed.set_footer(text="💡 Use /rep to give reputation to others!")
+            await interaction.response.send_message(embed=embed)
 
         except Exception as e:
-            self.logger.error(f"Error divorcing: {e}", exc_info=True)
-            await interaction.response.send_message("Failed to divorce. Please try again later.", ephemeral=True)
+            self.logger.error(f"Error in toprep command: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while fetching the leaderboard",
+                ephemeral=True
+            )
 
 async def setup(bot):
     await bot.add_cog(Social(bot))

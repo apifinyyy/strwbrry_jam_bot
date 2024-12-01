@@ -71,6 +71,55 @@ class AutoMod(commands.Cog):
                 "default": self.get_safe_default_config()
             })
 
+    async def get_guild_config(self, guild_id: int) -> dict:
+        """Get guild-specific automod configuration."""
+        try:
+            config = await self.bot.data_manager.load_json("automod", str(guild_id))
+            if not config:
+                # Create new config with enabled features
+                new_config = {
+                    "enabled": True,
+                    "spam_settings": {
+                        "message_threshold": 5,
+                        "time_window": 5,
+                        "mention_limit": 5,
+                        "repeat_threshold": 3,
+                        "punishment": "timeout",
+                        "duration": 300
+                    },
+                    "raid_settings": {
+                        "join_threshold": 10,
+                        "join_window": 60,
+                        "account_age": 86400,
+                        "action": "lockdown",
+                        "duration": 300
+                    },
+                    "quiet_hours": {
+                        "enabled": False,
+                        "start": "22:00",
+                        "end": "08:00",
+                        "stricter_limits": True
+                    },
+                    "log_channel": None,  # Will be set via command
+                    "exempt_roles": [],
+                    "content_filter": {
+                        "enabled": True,
+                        "blocked_words": [],
+                        "blocked_patterns": [],
+                        "url_whitelist": [],
+                        "invite_whitelist": [],
+                        "punishment": "delete"
+                    }
+                }
+                
+                await self.bot.data_manager.save_json("automod", str(guild_id), {"default": new_config})
+                return new_config
+            
+            return config.get("default", self.get_safe_default_config())
+        except Exception as e:
+            self.logger.error(f"Error loading automod config for guild {guild_id}: {e}")
+            return self.get_safe_default_config()
+
     async def get_config(self, guild_id: str) -> dict:
         """Get guild-specific or default config with caching and error handling"""
         try:
@@ -80,18 +129,13 @@ class AutoMod(commands.Cog):
                 if current_time - self._last_cache_update.get(guild_id, 0) < self._cache_ttl:
                     return deepcopy(self._config_cache[guild_id])
 
-            config = await self.bot.data_manager.load_json("automod", self.automod_key)
-            if not config:
-                config = {"default": self.get_safe_default_config()}
-
-            # Get guild config or create from default
-            guild_config = deepcopy(config.get(guild_id, config["default"]))
+            config = await self.get_guild_config(int(guild_id))
             
             # Update cache
-            self._config_cache[guild_id] = guild_config
+            self._config_cache[guild_id] = config
             self._last_cache_update[guild_id] = current_time
             
-            return guild_config
+            return config
         except Exception as e:
             self.logger.error(f"Error loading config for guild {guild_id}: {e}")
             return self.get_safe_default_config()
@@ -240,12 +284,11 @@ class AutoMod(commands.Cog):
     )
     @app_commands.choices(
         action=[
-            app_commands.Choice(name="Enable AutoMod", value="enable"),
-            app_commands.Choice(name="Disable AutoMod", value="disable"),
             app_commands.Choice(name="Configure Settings", value="config"),
             app_commands.Choice(name="View Settings", value="view")
         ],
         setting=[
+            app_commands.Choice(name="Enable/Disable AutoMod", value="enabled"),
             app_commands.Choice(name="Spam Protection", value="spam_settings"),
             app_commands.Choice(name="Raid Protection", value="raid_settings"),
             app_commands.Choice(name="Quiet Hours", value="quiet_hours"),
@@ -343,38 +386,6 @@ class AutoMod(commands.Cog):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            elif action == "enable":
-                if config["enabled"]:
-                    await interaction.response.send_message(
-                        "ℹ️ AutoMod is already enabled",
-                        ephemeral=True
-                    )
-                    return
-                    
-                config["enabled"] = True
-                await self.bot.data_manager.save_json("automod", self.automod_key, config)
-                await interaction.response.send_message(
-                    "✅ AutoMod has been enabled. Use `/automod view` to see current settings.",
-                    ephemeral=True
-                )
-                return
-            
-            elif action == "disable":
-                if not config["enabled"]:
-                    await interaction.response.send_message(
-                        "ℹ️ AutoMod is already disabled",
-                        ephemeral=True
-                    )
-                    return
-                    
-                config["enabled"] = False
-                await self.bot.data_manager.save_json("automod", self.automod_key, config)
-                await interaction.response.send_message(
-                    "✅ AutoMod has been disabled",
-                    ephemeral=True
-                )
-                return
-            
             elif action == "config":
                 if not setting or not value:
                     await interaction.response.send_message(
@@ -384,6 +395,31 @@ class AutoMod(commands.Cog):
                     return
                 
                 try:
+                    # Special handling for enable/disable setting
+                    if setting == "enabled":
+                        if value.lower() not in ['true', 'false']:
+                            await interaction.response.send_message(
+                                "❌ Value must be 'true' or 'false'",
+                                ephemeral=True
+                            )
+                            return
+                        new_value = value.lower() == 'true'
+                        if new_value == config["enabled"]:
+                            status = "enabled" if new_value else "disabled"
+                            await interaction.response.send_message(
+                                f"ℹ️ AutoMod is already {status}",
+                                ephemeral=True
+                            )
+                            return
+                        config["enabled"] = new_value
+                        await self.bot.data_manager.save_json("automod", self.automod_key, config)
+                        status = "enabled" if new_value else "disabled"
+                        await interaction.response.send_message(
+                            f"✅ AutoMod has been {status}. Use `/automod view` to see current settings.",
+                            ephemeral=True
+                        )
+                        return
+                    
                     parts = setting.split('.')
                     current = config
                     
@@ -429,7 +465,73 @@ class AutoMod(commands.Cog):
                             return
                         current[parts[-1]] = value
                     
-                    else:
+                    elif parts[-1] == 'log_channel':
+                        # Handle log channel configuration
+                        if value.lower() == 'none':
+                            current[parts[-1]] = None
+                        else:
+                            # Extract channel ID from mention or raw ID
+                            channel_id = ''.join(filter(str.isdigit, value))
+                            if not channel_id:
+                                await interaction.response.send_message(
+                                    "❌ Please provide a valid channel ID or mention",
+                                    ephemeral=True
+                                )
+                                return
+
+                            # Verify channel exists and bot has permissions
+                            channel = interaction.guild.get_channel(int(channel_id))
+                            if not channel:
+                                await interaction.response.send_message(
+                                    "❌ Channel not found in this server",
+                                    ephemeral=True
+                                )
+                                return
+
+                            # Check if it's a text channel
+                            if not isinstance(channel, discord.TextChannel):
+                                await interaction.response.send_message(
+                                    "❌ The log channel must be a text channel",
+                                    ephemeral=True
+                                )
+                                return
+
+                            # Check bot permissions in the channel
+                            bot_permissions = channel.permissions_for(interaction.guild.me)
+                            if not (bot_permissions.send_messages and bot_permissions.embed_links):
+                                await interaction.response.send_message(
+                                    "❌ I need 'Send Messages' and 'Embed Links' permissions in the log channel",
+                                    ephemeral=True
+                                )
+                                return
+
+                            current[parts[-1]] = channel_id
+
+                        await self.bot.data_manager.save_json("automod", self.automod_key, config)
+                        
+                        # Create confirmation message
+                        if current[parts[-1]] is None:
+                            confirm_msg = "✅ Logging channel has been disabled"
+                        else:
+                            channel = interaction.guild.get_channel(int(current[parts[-1]]))
+                            confirm_msg = f"✅ Set logging channel to {channel.mention}"
+                            
+                            # Send test message to verify
+                            try:
+                                test_embed = discord.Embed(
+                                    title="🛡️ Logging Channel Test",
+                                    description="This is a test message to confirm the logging channel is working correctly.",
+                                    color=discord.Color.green()
+                                )
+                                await channel.send(embed=test_embed)
+                            except Exception as e:
+                                self.logger.error(f"Error sending test message: {e}")
+                                confirm_msg += "\n⚠️ Warning: Failed to send test message. Please check channel permissions."
+
+                        await interaction.response.send_message(confirm_msg, ephemeral=True)
+                        return
+                    
+                    elif isinstance(old_value, str):
                         current[parts[-1]] = value
                     
                     await self.bot.data_manager.save_json("automod", self.automod_key, config)

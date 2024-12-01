@@ -16,12 +16,14 @@ class XPSystem(commands.Cog):
         self.DEFAULT_CONFIG = {
             'chat_xp': {'min': 15, 'max': 25},
             'voice_xp': {'per_minute': 10},
-            'enabled_channels': [],
-            'enabled_categories': [],
+            'enabled_channels': ['*'],  # '*' means all channels enabled
+            'enabled_categories': ['*'],  # '*' means all categories enabled
             'blocked_users': [],
             'level_roles': {},
             'level_up_channel': None,
-            'level_up_message': '🎉 Congratulations {user}! You reached level {level}!'
+            'level_up_message': '🎉 Congratulations {user}! You reached level {level}!',
+            'xp_gain_message': True,  # Whether to show XP gain messages
+            'xp_gain_message_chance': 0.1  # 10% chance to show XP gain
         }
 
     async def get_xp_config(self, guild_id: int) -> dict:
@@ -88,14 +90,61 @@ class XPSystem(commands.Cog):
             self.logger.error(f"Error handling level up: {e}")
 
     async def is_channel_enabled(self, channel: discord.TextChannel | discord.VoiceChannel) -> bool:
+        """Check if XP gain is enabled for a channel."""
         try:
             config = await self.get_xp_config(channel.guild.id)
+            enabled_channels = config['enabled_channels']
+            enabled_categories = config['enabled_categories']
+            
+            # If '*' is in either list, that means all channels/categories are enabled
+            if '*' in enabled_channels or '*' in enabled_categories:
+                return True
+                
             return (
-                str(channel.id) in config['enabled_channels'] or
-                str(channel.category_id) in config['enabled_categories']
+                str(channel.id) in enabled_channels or
+                (channel.category_id and str(channel.category_id) in enabled_categories)
             )
         except Exception as e:
             self.logger.error(f"Error checking channel enabled status: {e}")
+            return True  # Default to enabled if there's an error
+
+    async def get_user_xp(self, guild_id: int, user_id: int) -> dict:
+        """Get user XP data with proper initialization."""
+        try:
+            xp_data = self.bot.data_manager.load_data(guild_id, "xp")
+            if not xp_data:
+                xp_data = {}
+            
+            if str(user_id) not in xp_data:
+                xp_data[str(user_id)] = {
+                    'chat_xp': 0,
+                    'voice_xp': 0,
+                    'total_messages': 0,
+                    'voice_time': 0,
+                    'last_daily': None
+                }
+                self.bot.data_manager.save_data(guild_id, "xp", xp_data)
+            
+            return xp_data[str(user_id)]
+        except Exception as e:
+            self.logger.error(f"Error getting user XP: {e}")
+            return {
+                'chat_xp': 0,
+                'voice_xp': 0,
+                'total_messages': 0,
+                'voice_time': 0,
+                'last_daily': None
+            }
+
+    async def save_user_xp(self, guild_id: int, user_id: int, xp_data: dict) -> bool:
+        """Save user XP data safely."""
+        try:
+            all_xp_data = self.bot.data_manager.load_data(guild_id, "xp") or {}
+            all_xp_data[str(user_id)] = xp_data
+            self.bot.data_manager.save_data(guild_id, "xp", all_xp_data)
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving user XP: {e}")
             return False
 
     @commands.Cog.listener()
@@ -105,10 +154,12 @@ class XPSystem(commands.Cog):
 
         try:
             config = await self.get_xp_config(message.guild.id)
-            enabled = await self.is_channel_enabled(message.channel)
-            if not enabled:
+            
+            # Check if channel is enabled
+            if not await self.is_channel_enabled(message.channel):
                 return
 
+            # Check if user is blocked
             if str(message.author.id) in config['blocked_users']:
                 return
 
@@ -120,29 +171,51 @@ class XPSystem(commands.Cog):
                     return
             self.xp_cooldown[user_id] = current_time
 
-            try:
-                if user_id not in self.bot.data['users']:
-                    self.bot.data['users'][user_id] = {'chat_xp': 0, 'voice_xp': 0}
+            # Get user data
+            user_data = await self.get_user_xp(message.guild.id, message.author.id)
+            old_xp = user_data['chat_xp']
+            
+            # Calculate XP gain
+            xp_gain = random.randint(
+                config['chat_xp']['min'],
+                config['chat_xp']['max']
+            )
+            
+            # Update user data
+            user_data['chat_xp'] += xp_gain
+            user_data['total_messages'] += 1
+            
+            # Save data
+            if not await self.save_user_xp(message.guild.id, message.author.id, user_data):
+                self.logger.error(f"Failed to save XP for user {message.author.id}")
+                return
 
-                old_xp = self.bot.data['users'][user_id]['chat_xp']
-                xp_gain = random.randint(
-                    config['chat_xp']['min'],
-                    config['chat_xp']['max']
-                )
-                self.bot.data['users'][user_id]['chat_xp'] += xp_gain
-                self.bot.save_data()
+            # Show XP gain message (if enabled and random chance hits)
+            if (config['xp_gain_message'] and 
+                random.random() < config['xp_gain_message_chance']):
+                try:
+                    embed = discord.Embed(
+                        title="✨ XP Gained!",
+                        description=f"You earned **{xp_gain}** XP!",
+                        color=discord.Color.green()
+                    )
+                    await message.channel.send(
+                        message.author.mention,
+                        embed=embed,
+                        delete_after=5
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error sending XP gain message: {e}")
 
-                await self.check_and_handle_level_up(
-                    message.author,
-                    old_xp,
-                    self.bot.data['users'][user_id]['chat_xp']
-                )
-
-            except Exception as e:
-                self.logger.error(f"Error handling message XP: {e}")
+            # Handle level up
+            await self.check_and_handle_level_up(
+                message.author,
+                old_xp,
+                user_data['chat_xp']
+            )
 
         except Exception as e:
-            self.logger.error(f"Error in on_message: {e}")
+            self.logger.error(f"Error in on_message XP handling: {e}")
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
@@ -170,18 +243,26 @@ class XPSystem(commands.Cog):
                     return
 
                 user_id = str(member.id)
-                if user_id not in self.bot.data['users']:
-                    self.bot.data['users'][user_id] = {'chat_xp': 0, 'voice_xp': 0}
-
-                old_xp = self.bot.data['users'][user_id]['voice_xp']
+                user_data = await self.get_user_xp(member.guild.id, member.id)
+                old_xp = user_data['voice_xp']
+                
+                # Calculate XP gain
                 xp_gain = int(duration * config['voice_xp']['per_minute'])
-                self.bot.data['users'][user_id]['voice_xp'] += xp_gain
-                self.bot.save_data()
+                
+                # Update user data
+                user_data['voice_xp'] += xp_gain
+                user_data['voice_time'] += duration
+                
+                # Save data
+                if not await self.save_user_xp(member.guild.id, member.id, user_data):
+                    self.logger.error(f"Failed to save XP for user {member.id}")
+                    return
 
+                # Handle level up
                 await self.check_and_handle_level_up(
                     member,
                     old_xp,
-                    self.bot.data['users'][user_id]['voice_xp']
+                    user_data['voice_xp']
                 )
 
         except Exception as e:
