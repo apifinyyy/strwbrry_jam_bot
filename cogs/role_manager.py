@@ -1,8 +1,9 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Literal
 from datetime import datetime, timedelta
+import logging
 import json
 import asyncio
 
@@ -11,23 +12,31 @@ class RoleManager(commands.Cog):
         self.bot = bot
         self.roles_key = "roles_config"
         self.xp_key = "user_xp"
-        # Don't start the task here, it will be started in cog_load
-        self.check_xp_roles = tasks.loop(minutes=5.0)(self._check_xp_roles)
-
-    async def cog_load(self):
-        """Called when the cog is loaded"""
-        await self.init_data()
-        self.check_xp_roles.start()
+        self.logger = logging.getLogger('strwbrry_jam.role_manager')
+        self.role_lock = asyncio.Lock()  # Add lock for thread safety
+        self.check_xp_roles.start()  # Start the task loop
 
     def cog_unload(self):
-        """Called when the cog is unloaded"""
         self.check_xp_roles.cancel()
 
-    async def _check_xp_roles(self):
+    async def init_data(self):
+        """Initialize role data"""
+        try:
+            data = await self.bot.data_manager.load_json("roles", self.roles_key)
+        except FileNotFoundError:
+            data = {
+                "xp_roles": {},
+                "persistent_roles": {}
+            }
+            await self.bot.data_manager.save_json("roles", self.roles_key, data)
+        return data
+
+    @tasks.loop(minutes=5.0)
+    async def check_xp_roles(self):
         """Check and update roles based on XP periodically"""
         try:
             xp_data = await self.bot.data_manager.load_json("xp", self.xp_key)
-            roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
+            roles_config = await self.init_data()
             
             for guild_id, guild_data in xp_data.items():
                 guild = self.bot.get_guild(int(guild_id))
@@ -37,704 +46,367 @@ class RoleManager(commands.Cog):
                 xp_roles = roles_config.get("xp_roles", {}).get(str(guild_id), {})
                 if not xp_roles:
                     continue
-                    
+
                 for user_id, user_xp in guild_data.items():
                     member = guild.get_member(int(user_id))
                     if not member:
                         continue
+
+                    # Sort roles by XP requirement
+                    sorted_roles = sorted(xp_roles.items(), key=lambda x: int(x[1]["xp_required"]))
+                    
+                    # Find the highest role the user qualifies for
+                    highest_role = None
+                    for role_id, role_data in sorted_roles:
+                        if user_xp >= role_data["xp_required"]:
+                            role = guild.get_role(int(role_id))
+                            if role:
+                                highest_role = role
+
+                    if highest_role:
+                        # Remove other XP roles
+                        roles_to_remove = [
+                            guild.get_role(int(role_id)) 
+                            for role_id in xp_roles.keys() 
+                            if int(role_id) != highest_role.id
+                        ]
+                        roles_to_remove = [r for r in roles_to_remove if r]
                         
-                    await self.update_member_roles(member, user_xp, xp_roles)
-                    
+                        if roles_to_remove:
+                            await member.remove_roles(*roles_to_remove, reason="XP role update")
+                        
+                        # Add highest qualified role if not present
+                        if highest_role not in member.roles:
+                            await member.add_roles(highest_role, reason="XP role update")
         except Exception as e:
-            self.bot.logger.error(f"Error in XP role check task: {e}")
+            self.logger.error(f"Error in check_xp_roles: {e}")
 
-    async def init_data(self):
-        """Initialize role configuration data"""
-        if not await self.bot.data_manager.exists("roles", "key = ?", self.roles_key):
-            await self.bot.data_manager.save_json("roles", self.roles_key, {
-                "reaction_roles": {},  # message_id -> {emoji: role_id}
-                "role_groups": {},     # group_name -> [role_ids]
-                "xp_roles": {},        # guild_id -> {role_id: required_xp}
-                "role_paths": {},      # role_id -> required_role_id
-                "temp_roles": {},      # role_id -> duration
-                "exclusive_groups": {}, # group_name -> [role_ids] (mutually exclusive roles)
-                "role_hierarchy": {},  # guild_id -> {tier: [role_ids]}
-                "role_analytics": {},  # guild_id -> {role_id: {assignments: int, removals: int, active: int}}
-                "settings": {
-                    "xp_per_message": 1,
-                    "xp_cooldown": 60,  # seconds
-                    "level_multiplier": 1.5
-                }
-            })
-        
-        if not await self.bot.data_manager.exists("xp", "key = ?", self.xp_key):
-            await self.bot.data_manager.save_json("xp", self.xp_key, {})  # guild_id -> user_id -> xp
+    async def _check_role_hierarchy(self, interaction: discord.Interaction, role: discord.Role) -> bool:
+        """Check if the bot and user have permission to manage the role"""
+        if role >= interaction.guild.me.top_role:
+            await interaction.response.send_message("❌ I cannot manage this role as it is higher than my highest role.", ephemeral=True)
+            return False
+        if role >= interaction.user.top_role and interaction.user.id != interaction.guild.owner_id:
+            await interaction.response.send_message("❌ You cannot manage this role as it is higher than your highest role.", ephemeral=True)
+            return False
+        return True
 
-    async def get_user_xp(self, guild_id: str, user_id: str) -> int:
-        """Get user's XP in a guild"""
-        xp_data = await self.bot.data_manager.load_json("xp", self.xp_key)
-        return xp_data.get(str(guild_id), {}).get(str(user_id), 0)
-
-    async def add_xp(self, guild_id: str, user_id: str, amount: int):
-        """Add XP to a user and check for role upgrades"""
-        xp_data = await self.bot.data_manager.load_json("xp", self.xp_key)
-        if str(guild_id) not in xp_data:
-            xp_data[str(guild_id)] = {}
-        
-        user_data = xp_data[str(guild_id)]
-        current_xp = user_data.get(str(user_id), 0)
-        user_data[str(user_id)] = current_xp + amount
-        
-        await self.bot.data_manager.save_json("xp", self.xp_key, xp_data)
-        await self.check_user_roles(guild_id, user_id)
-
-    async def check_user_roles(self, guild_id: str, user_id: str):
-        """Check and update a user's roles based on XP"""
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        xp_roles = roles_config.get("xp_roles", {}).get(str(guild_id), {})
-        if not xp_roles:
-            return
-            
-        guild = self.bot.get_guild(int(guild_id))
-        member = guild.get_member(int(user_id))
-        if not member:
-            return
-            
-        user_xp = await self.get_user_xp(guild_id, user_id)
-        
-        # Sort roles by XP requirement
-        sorted_roles = sorted(
-            xp_roles.items(),
-            key=lambda x: int(x[1])
-        )
-        
-        # Find highest eligible role
-        highest_role = None
-        for role_id, required_xp in sorted_roles:
-            if user_xp >= int(required_xp):
-                highest_role = role_id
-            else:
-                break
-        
-        if highest_role:
-            # Remove other XP roles
-            for role_id in xp_roles.keys():
-                role = guild.get_role(int(role_id))
-                if role and role in member.roles and role_id != highest_role:
-                    await member.remove_roles(role)
-            
-            # Add highest eligible role
-            role = guild.get_role(int(highest_role))
-            if role and role not in member.roles:
-                await member.add_roles(role)
-
-    @app_commands.command(
-        name="setreactionrole",
-        description="Create a reaction role message"
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    @app_commands.command(name="xprole")
+    @app_commands.describe(
+        action="Whether to add, remove, or list XP roles",
+        role="The role to manage (not needed for 'list')",
+        xp_required="Amount of XP required for the role (only for 'add')"
     )
-    @app_commands.default_permissions(administrator=True)
-    async def set_reaction_role(
+    @app_commands.default_permissions(manage_roles=True)
+    async def xprole(
         self,
         interaction: discord.Interaction,
-        title: str,
-        description: str,
-        role: discord.Role,
-        emoji: str
+        action: Literal["add", "remove", "list"],
+        role: Optional[discord.Role] = None,
+        xp_required: Optional[int] = None
     ):
-        """Create a reaction role message"""
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=discord.Color.blue()
-        )
-        
-        msg = await interaction.channel.send(embed=embed)
-        await msg.add_reaction(emoji)
-        
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        if str(msg.id) not in roles_config["reaction_roles"]:
-            roles_config["reaction_roles"][str(msg.id)] = {}
-        
-        roles_config["reaction_roles"][str(msg.id)][emoji] = role.id
-        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
-        
-        await interaction.response.send_message(
-            "✅ Reaction role created!",
-            ephemeral=True
-        )
+        """Manage XP-based roles"""
+        try:
+            if not interaction.guild:
+                await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+                return
 
-    @app_commands.command(
-        name="setxprole",
-        description="Set an XP-based role"
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def set_xp_role(
-        self,
-        interaction: discord.Interaction,
-        role: discord.Role,
-        required_xp: int,
-        required_role: Optional[discord.Role] = None
-    ):
-        """Set an XP-based role with requirements"""
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        guild_id = str(interaction.guild_id)
-        
-        if "xp_roles" not in roles_config:
-            roles_config["xp_roles"] = {}
-        if guild_id not in roles_config["xp_roles"]:
-            roles_config["xp_roles"][guild_id] = {}
-        
-        roles_config["xp_roles"][guild_id][str(role.id)] = required_xp
-        
-        if required_role:
-            if "role_paths" not in roles_config:
-                roles_config["role_paths"] = {}
-            roles_config["role_paths"][str(role.id)] = required_role.id
-        
-        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
-        
-        response = f"✅ Set {role.mention} as XP role (Required XP: {required_xp})"
-        if required_role:
-            response += f"\nRequires: {required_role.mention}"
-        
-        await interaction.response.send_message(
-            response,
-            ephemeral=True
-        )
-
-    @app_commands.command(
-        name="settemprole",
-        description="Set a temporary role duration"
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def set_temp_role(
-        self,
-        interaction: discord.Interaction,
-        role: discord.Role,
-        duration: int  # hours
-    ):
-        """Set a role to be temporary"""
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        
-        if "temp_roles" not in roles_config:
-            roles_config["temp_roles"] = {}
-        
-        roles_config["temp_roles"][str(role.id)] = duration * 3600  # convert to seconds
-        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
-        
-        await interaction.response.send_message(
-            f"✅ Set {role.mention} as temporary role ({duration} hours)",
-            ephemeral=True
-        )
-
-    @app_commands.command(
-        name="setexclusivegroup",
-        description="Create a group of mutually exclusive roles"
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def set_exclusive_group(
-        self,
-        interaction: discord.Interaction,
-        group_name: str,
-        roles: str  # Comma-separated role mentions or IDs
-    ):
-        """Create a group of mutually exclusive roles"""
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        
-        if "exclusive_groups" not in roles_config:
-            roles_config["exclusive_groups"] = {}
-        
-        # Parse roles from the input string
-        role_ids = []
-        for role_str in roles.split(','):
-            role_str = role_str.strip()
-            if role_str.startswith('<@&') and role_str.endswith('>'):
-                role_id = role_str[3:-1]
-            else:
-                role_id = role_str
+            if action == "list":
+                return await self._list_xp_roles(interaction)
             
-            try:
-                role = interaction.guild.get_role(int(role_id))
-                if role:
-                    role_ids.append(str(role.id))
-            except ValueError:
-                continue
-        
-        if not role_ids:
-            await interaction.response.send_message(
-                "❌ No valid roles provided",
-                ephemeral=True
-            )
-            return
-        
-        roles_config["exclusive_groups"][group_name] = role_ids
-        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
-        
-        role_mentions = [f"<@&{role_id}>" for role_id in role_ids]
-        await interaction.response.send_message(
-            f"✅ Created exclusive group '{group_name}' with roles: {', '.join(role_mentions)}",
-            ephemeral=True
-        )
+            if not role:
+                await interaction.response.send_message("❌ You must specify a role!", ephemeral=True)
+                return
 
-    async def handle_exclusive_roles(self, member: discord.Member, new_role: discord.Role):
-        """Handle mutually exclusive roles when adding a new role"""
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        
-        # Find groups containing the new role
-        for group_name, role_ids in roles_config.get("exclusive_groups", {}).items():
-            if str(new_role.id) in role_ids:
-                # Remove other roles in the same group
-                roles_to_remove = []
-                for role_id in role_ids:
-                    if role_id != str(new_role.id):
-                        role = member.guild.get_role(int(role_id))
-                        if role and role in member.roles:
-                            roles_to_remove.append(role)
+            # Check role hierarchy
+            if not await self._check_role_hierarchy(interaction, role):
+                return
+
+            async with self.role_lock:  # Use lock for thread safety
+                config = await self.init_data()
+                guild_id = str(interaction.guild_id)
                 
-                if roles_to_remove:
-                    await member.remove_roles(*roles_to_remove)
-                    
-                    # Trigger auto-role system
-                    auto_roles = self.bot.get_cog('AutoRoles')
-                    if auto_roles:
-                        for role in roles_to_remove:
-                            config = auto_roles.get_auto_role_config(member.guild.id)
-                            if str(role.id) in config.get('auto_remove_roles', {}):
-                                roles_to_remove = config['auto_remove_roles'][str(role.id)]
-                                roles = [discord.Object(id=int(r)) for r in roles_to_remove]
-                                try:
-                                    await member.remove_roles(*roles, reason="Auto role removal")
-                                except discord.Forbidden:
-                                    pass
+                if guild_id not in config["xp_roles"]:
+                    config["xp_roles"][guild_id] = {}
 
-    @app_commands.command(
-        name="sethierarchy",
-        description="Set up role hierarchy tiers"
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def set_hierarchy(
-        self,
-        interaction: discord.Interaction,
-        tier: int,
-        roles: str  # Comma-separated role mentions or IDs
-    ):
-        """Set up role hierarchy tiers"""
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        guild_id = str(interaction.guild_id)
-        
-        if "role_hierarchy" not in roles_config:
-            roles_config["role_hierarchy"] = {}
-        if guild_id not in roles_config["role_hierarchy"]:
-            roles_config["role_hierarchy"][guild_id] = {}
-        
-        # Parse roles
-        role_ids = []
-        for role_str in roles.split(','):
-            role_str = role_str.strip()
-            if role_str.startswith('<@&') and role_str.endswith('>'):
-                role_id = role_str[3:-1]
-            else:
-                role_id = role_str
-            
-            try:
-                role = interaction.guild.get_role(int(role_id))
-                if role:
-                    role_ids.append(str(role.id))
-            except ValueError:
-                continue
-        
-        if not role_ids:
+                if action == "add":
+                    if not xp_required:
+                        await interaction.response.send_message("❌ You must specify the required XP!", ephemeral=True)
+                        return
+                    
+                    if xp_required < 0:
+                        await interaction.response.send_message("❌ XP requirement cannot be negative!", ephemeral=True)
+                        return
+
+                    # Check for role conflicts
+                    for existing_role_id, existing_data in config["xp_roles"][guild_id].items():
+                        if existing_data["xp_required"] == xp_required:
+                            existing_role = interaction.guild.get_role(int(existing_role_id))
+                            if existing_role:
+                                await interaction.response.send_message(
+                                    f"❌ There's already a role ({existing_role.mention}) with {xp_required} XP requirement!",
+                                    ephemeral=True
+                                )
+                                return
+                    
+                    config["xp_roles"][guild_id][str(role.id)] = {
+                        "xp_required": xp_required,
+                        "name": role.name
+                    }
+                    await self.bot.data_manager.save_json("roles", self.roles_key, config)
+                    await interaction.response.send_message(
+                        f"✅ Added {role.mention} as an XP role (requires {xp_required:,} XP)",
+                        ephemeral=True
+                    )
+                
+                elif action == "remove":
+                    if str(role.id) in config["xp_roles"][guild_id]:
+                        del config["xp_roles"][guild_id][str(role.id)]
+                        await self.bot.data_manager.save_json("roles", self.roles_key, config)
+                        
+                        # Remove the role from all members who have it
+                        for member in interaction.guild.members:
+                            if role in member.roles:
+                                try:
+                                    await member.remove_roles(role, reason="XP role removed from configuration")
+                                except discord.HTTPException:
+                                    continue
+                        
+                        await interaction.response.send_message(
+                            f"✅ Removed {role.mention} from XP roles and removed it from all members",
+                            ephemeral=True
+                        )
+                    else:
+                        await interaction.response.send_message(
+                            f"❌ {role.mention} is not an XP role",
+                            ephemeral=True
+                        )
+        except discord.Forbidden:
             await interaction.response.send_message(
-                "❌ No valid roles provided",
+                "❌ I don't have permission to manage roles. Please check my role permissions.",
                 ephemeral=True
             )
-            return
-        
-        roles_config["role_hierarchy"][guild_id][str(tier)] = role_ids
-        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
-        
-        role_mentions = [f"<@&{role_id}>" for role_id in role_ids]
-        await interaction.response.send_message(
-            f"✅ Set tier {tier} with roles: {', '.join(role_mentions)}",
-            ephemeral=True
-        )
-
-    async def check_hierarchy_requirements(
-        self,
-        member: discord.Member,
-        role: discord.Role
-    ) -> tuple[bool, str]:
-        """Check if a member meets hierarchy requirements for a role"""
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        guild_id = str(member.guild.id)
-        
-        if guild_id not in roles_config.get("role_hierarchy", {}):
-            return True, ""
-        
-        # Find role's tier
-        role_tier = None
-        hierarchy = roles_config["role_hierarchy"][guild_id]
-        for tier, role_ids in hierarchy.items():
-            if str(role.id) in role_ids:
-                role_tier = int(tier)
-                break
-        
-        if role_tier is None:
-            return True, ""
-        
-        # Check if user has roles from previous tier
-        if role_tier > 0:
-            prev_tier = str(role_tier - 1)
-            if prev_tier in hierarchy:
-                has_prev_tier = any(
-                    str(r.id) in hierarchy[prev_tier] for r in member.roles
-                )
-                if not has_prev_tier:
-                    prev_roles = [
-                        member.guild.get_role(int(r_id))
-                        for r_id in hierarchy[prev_tier]
-                    ]
-                    prev_roles = [r.name for r in prev_roles if r]
-                    return False, f"You need a role from tier {prev_tier} first: {', '.join(prev_roles)}"
-        
-        return True, ""
-
-    @app_commands.command(
-        name="roleanalytics",
-        description="View role assignment analytics"
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def role_analytics(
-        self,
-        interaction: discord.Interaction,
-        role: Optional[discord.Role] = None
-    ):
-        """View role assignment analytics"""
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        guild_id = str(interaction.guild_id)
-        
-        if "role_analytics" not in roles_config:
-            roles_config["role_analytics"] = {}
-        if guild_id not in roles_config["role_analytics"]:
-            roles_config["role_analytics"][guild_id] = {}
-        
-        analytics = roles_config["role_analytics"][guild_id]
-        
-        embed = discord.Embed(
-            title="Role Analytics",
-            color=discord.Color.blue(),
-            timestamp=datetime.utcnow()
-        )
-        
-        if role:
-            # Single role analytics
-            role_stats = analytics.get(str(role.id), {
-                "assignments": 0,
-                "removals": 0,
-                "active": len([m for m in interaction.guild.members if role in m.roles])
-            })
-            
-            embed.add_field(
-                name=role.name,
-                value=f"Assignments: {role_stats['assignments']}\n"
-                      f"Removals: {role_stats['removals']}\n"
-                      f"Currently Active: {role_stats['active']}"
+        except Exception as e:
+            self.logger.error(f"Error in xprole command: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while managing XP roles. Please try again later.",
+                ephemeral=True
             )
-        else:
-            # Top 10 most active roles
-            sorted_roles = sorted(
-                analytics.items(),
-                key=lambda x: x[1].get('active', 0),
-                reverse=True
-            )[:10]
+
+    async def _list_xp_roles(self, interaction: discord.Interaction):
+        """List all XP roles"""
+        try:
+            config = await self.init_data()
+            guild_id = str(interaction.guild_id)
             
-            for role_id, stats in sorted_roles:
+            if guild_id not in config["xp_roles"] or not config["xp_roles"][guild_id]:
+                await interaction.response.send_message("No XP roles configured!", ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title="XP Roles Configuration",
+                color=discord.Color.blue()
+            )
+
+            # Sort roles by XP requirement
+            sorted_roles = sorted(
+                config["xp_roles"][guild_id].items(),
+                key=lambda x: x[1]["xp_required"]
+            )
+
+            for role_id, role_data in sorted_roles:
                 role = interaction.guild.get_role(int(role_id))
                 if role:
                     embed.add_field(
                         name=role.name,
-                        value=f"Assignments: {stats.get('assignments', 0)}\n"
-                              f"Removals: {stats.get('removals', 0)}\n"
-                              f"Currently Active: {stats.get('active', 0)}",
-                        inline=True
+                        value=f"Required XP: {role_data['xp_required']}",
+                        inline=False
                     )
-        
-        await interaction.response.send_message(embed=embed)
 
-    async def update_role_analytics(
-        self,
-        guild_id: int,
-        role_id: int,
-        action: str
-    ):
-        """Update role analytics"""
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        guild_id = str(guild_id)
-        role_id = str(role_id)
-        
-        if "role_analytics" not in roles_config:
-            roles_config["role_analytics"] = {}
-        if guild_id not in roles_config["role_analytics"]:
-            roles_config["role_analytics"][guild_id] = {}
-        if role_id not in roles_config["role_analytics"][guild_id]:
-            roles_config["role_analytics"][guild_id][role_id] = {
-                "assignments": 0,
-                "removals": 0,
-                "active": 0
-            }
-        
-        stats = roles_config["role_analytics"][guild_id][role_id]
-        if action == "add":
-            stats["assignments"] += 1
-            stats["active"] += 1
-        elif action == "remove":
-            stats["removals"] += 1
-            stats["active"] = max(0, stats["active"] - 1)
-        
-        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            self.logger.error(f"Error in _list_xp_roles: {e}")
+            await interaction.response.send_message("❌ An error occurred while listing XP roles", ephemeral=True)
 
-    @app_commands.command(
-        name="xpconfig",
-        description="Configure XP settings"
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    @app_commands.command(name="persistentrole")
+    @app_commands.describe(
+        action="Whether to add, remove, or list persistent roles",
+        role="The role to manage (not needed for 'list')"
     )
-    @app_commands.default_permissions(administrator=True)
-    async def xp_config(
+    @app_commands.default_permissions(manage_roles=True)
+    async def persistentrole(
         self,
         interaction: discord.Interaction,
-        xp_per_message: Optional[int] = None,
-        xp_cooldown: Optional[int] = None,
-        level_multiplier: Optional[float] = None
+        action: Literal["add", "remove", "list"],
+        role: Optional[discord.Role] = None
     ):
-        """Configure XP settings"""
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        
-        if xp_per_message is not None:
-            roles_config["settings"]["xp_per_message"] = xp_per_message
-        if xp_cooldown is not None:
-            roles_config["settings"]["xp_cooldown"] = xp_cooldown
-        if level_multiplier is not None:
-            roles_config["settings"]["level_multiplier"] = level_multiplier
-        
-        await self.bot.data_manager.save_json("roles", self.roles_key, roles_config)
-        
-        await interaction.response.send_message(
-            "✅ XP settings updated!",
-            ephemeral=True
-        )
+        """Manage roles that persist through member leaves/joins"""
+        try:
+            if not interaction.guild:
+                await interaction.response.send_message("❌ This command can only be used in a server!", ephemeral=True)
+                return
 
-    @app_commands.command(
-        name="checkxp",
-        description="Check your or another user's XP"
-    )
-    async def check_xp(
-        self,
-        interaction: discord.Interaction,
-        user: Optional[discord.Member] = None
-    ):
-        """Check XP progress"""
-        user = user or interaction.user
-        xp = await self.get_user_xp(str(interaction.guild_id), str(user.id))
-        
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        xp_roles = roles_config.get("xp_roles", {}).get(
-            str(interaction.guild_id),
-            {}
-        )
-        
-        embed = discord.Embed(
-            title=f"XP Progress - {user.display_name}",
-            color=discord.Color.blue()
-        )
-        embed.add_field(name="Current XP", value=str(xp))
-        
-        if xp_roles:
-            # Show next role target
-            sorted_roles = sorted(
-                xp_roles.items(),
-                key=lambda x: int(x[1])
+            if action == "list":
+                return await self._list_persistent_roles(interaction)
+            
+            if not role:
+                await interaction.response.send_message("❌ You must specify a role!", ephemeral=True)
+                return
+
+            # Check role hierarchy
+            if not await self._check_role_hierarchy(interaction, role):
+                return
+
+            async with self.role_lock:  # Use lock for thread safety
+                config = await self.init_data()
+                guild_id = str(interaction.guild_id)
+                
+                if guild_id not in config.get("persistent_roles", {}):
+                    config.setdefault("persistent_roles", {})[guild_id] = []
+
+                if action == "add":
+                    if role.managed:
+                        await interaction.response.send_message(
+                            "❌ Cannot make managed roles (like bot roles) persistent!",
+                            ephemeral=True
+                        )
+                        return
+
+                    if role.id not in config["persistent_roles"][guild_id]:
+                        config["persistent_roles"][guild_id].append(role.id)
+                        await self.bot.data_manager.save_json("roles", self.roles_key, config)
+                        await interaction.response.send_message(
+                            f"✅ Added {role.mention} as a persistent role. This role will be restored when members rejoin.",
+                            ephemeral=True
+                        )
+                    else:
+                        await interaction.response.send_message(
+                            f"❌ {role.mention} is already a persistent role",
+                            ephemeral=True
+                        )
+                
+                elif action == "remove":
+                    if role.id in config["persistent_roles"][guild_id]:
+                        config["persistent_roles"][guild_id].remove(role.id)
+                        
+                        # Clean up stored roles for this role
+                        if "stored_roles" in config and guild_id in config["stored_roles"]:
+                            for user_id in config["stored_roles"][guild_id]:
+                                if role.id in config["stored_roles"][guild_id][user_id]:
+                                    config["stored_roles"][guild_id][user_id].remove(role.id)
+                        
+                        await self.bot.data_manager.save_json("roles", self.roles_key, config)
+                        await interaction.response.send_message(
+                            f"✅ Removed {role.mention} from persistent roles and cleaned up stored role data",
+                            ephemeral=True
+                        )
+                    else:
+                        await interaction.response.send_message(
+                            f"❌ {role.mention} is not a persistent role",
+                            ephemeral=True
+                        )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ I don't have permission to manage roles. Please check my role permissions.",
+                ephemeral=True
             )
-            next_role = None
-            for role_id, required_xp in sorted_roles:
-                if int(required_xp) > xp:
-                    next_role = (role_id, required_xp)
-                    break
+        except Exception as e:
+            self.logger.error(f"Error in persistentrole command: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while managing persistent roles. Please try again later.",
+                ephemeral=True
+            )
+
+    async def _list_persistent_roles(self, interaction: discord.Interaction):
+        """List all persistent roles"""
+        try:
+            config = await self.init_data()
+            guild_id = str(interaction.guild_id)
             
-            if next_role:
-                role = interaction.guild.get_role(int(next_role[0]))
+            if guild_id not in config.get("persistent_roles", {}) or not config["persistent_roles"][guild_id]:
+                await interaction.response.send_message("No persistent roles configured!", ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title="Persistent Roles",
+                description="These roles will be restored when members rejoin",
+                color=discord.Color.blue()
+            )
+
+            roles_list = []
+            for role_id in config["persistent_roles"][guild_id]:
+                role = interaction.guild.get_role(role_id)
                 if role:
-                    embed.add_field(
-                        name="Next Role",
-                        value=f"{role.mention} ({next_role[1] - xp} XP needed)"
-                    )
-        
-        await interaction.response.send_message(
-            embed=embed,
-            ephemeral=True
-        )
+                    roles_list.append(role.mention)
+
+            embed.add_field(
+                name="Roles",
+                value="\n".join(roles_list) if roles_list else "No persistent roles found",
+                inline=False
+            )
+
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            self.logger.error(f"Error in _list_persistent_roles: {e}")
+            await interaction.response.send_message("❌ An error occurred while listing persistent roles", ephemeral=True)
 
     @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        """Handle XP gain from messages"""
-        if message.author.bot or not message.guild:
-            return
+    async def on_member_remove(self, member: discord.Member):
+        """Store roles when a member leaves"""
+        try:
+            config = await self.init_data()
+            guild_id = str(member.guild.id)
             
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        settings = roles_config["settings"]
-        
-        # Check cooldown
-        xp_data = await self.bot.data_manager.load_json("xp", self.xp_key)
-        guild_id = str(message.guild.id)
-        user_id = str(message.author.id)
-        
-        if guild_id in xp_data and user_id in xp_data[guild_id]:
-            last_xp = xp_data[guild_id].get(f"{user_id}_last", 0)
-            if datetime.utcnow().timestamp() - last_xp < settings["xp_cooldown"]:
+            if guild_id not in config.get("persistent_roles", {}):
                 return
-        
-        # Add XP
-        await self.add_xp(
-            guild_id,
-            user_id,
-            settings["xp_per_message"]
-        )
-        
-        # Update last XP time
-        if guild_id not in xp_data:
-            xp_data[guild_id] = {}
-        xp_data[guild_id][f"{user_id}_last"] = datetime.utcnow().timestamp()
-        await self.bot.data_manager.save_json("xp", self.xp_key, xp_data)
+
+            # Get the member's persistent roles
+            persistent_roles = [
+                role.id for role in member.roles
+                if role.id in config["persistent_roles"][guild_id]
+            ]
+
+            if persistent_roles:
+                if "stored_roles" not in config:
+                    config["stored_roles"] = {}
+                if guild_id not in config["stored_roles"]:
+                    config["stored_roles"][guild_id] = {}
+                
+                config["stored_roles"][guild_id][str(member.id)] = persistent_roles
+                await self.bot.data_manager.save_json("roles", self.roles_key, config)
+        except Exception as e:
+            self.logger.error(f"Error in on_member_remove event: {e}")
 
     @commands.Cog.listener()
-    async def on_member_update(self, before: discord.Member, after: discord.Member):
-        """Track role changes for analytics"""
-        if before.roles == after.roles:
-            return
-        
-        added_roles = set(after.roles) - set(before.roles)
-        removed_roles = set(before.roles) - set(after.roles)
-        
-        for role in added_roles:
-            await self.update_role_analytics(after.guild.id, role.id, "add")
-        
-        for role in removed_roles:
-            await self.update_role_analytics(after.guild.id, role.id, "remove")
+    async def on_member_join(self, member: discord.Member):
+        """Restore roles when a member rejoins"""
+        try:
+            config = await self.init_data()
+            guild_id = str(member.guild.id)
+            
+            if (
+                "stored_roles" in config
+                and guild_id in config["stored_roles"]
+                and str(member.id) in config["stored_roles"][guild_id]
+            ):
+                stored_roles = config["stored_roles"][guild_id][str(member.id)]
+                roles_to_add = []
+                
+                for role_id in stored_roles:
+                    role = member.guild.get_role(role_id)
+                    if role and role.id in config.get("persistent_roles", {}).get(guild_id, []):
+                        roles_to_add.append(role)
 
-    @commands.Cog.listener()
-    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
-        """Handle reaction role addition"""
-        if payload.user_id == self.bot.user.id:
-            return
-            
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        message_roles = roles_config["reaction_roles"].get(str(payload.message_id))
-        
-        if not message_roles:
-            return
-            
-        role_id = message_roles.get(str(payload.emoji))
-        if not role_id:
-            return
-            
-        guild = self.bot.get_guild(payload.guild_id)
-        role = guild.get_role(int(role_id))
-        member = guild.get_member(payload.user_id)
-        
-        if role and member:
-            # Check role path requirements
-            if str(role_id) in roles_config.get("role_paths", {}):
-                required_role_id = roles_config["role_paths"][str(role_id)]
-                required_role = guild.get_role(int(required_role_id))
-                if required_role not in member.roles:
-                    await payload.member.send(
-                        f"You need the {required_role.name} role first!"
-                    )
-                    return
-            
-            # Check hierarchy requirements
-            can_have_role, reason = await self.check_hierarchy_requirements(member, role)
-            if not can_have_role:
-                await payload.member.send(reason)
-                return
-            
-            # Handle exclusive roles before adding the new role
-            await self.handle_exclusive_roles(member, role)
-            
-            await member.add_roles(role)
-            await self.update_role_analytics(guild.id, role.id, "add")
-            
-            # Trigger auto-role system
-            auto_roles = self.bot.get_cog('AutoRoles')
-            if auto_roles:
-                config = auto_roles.get_auto_role_config(guild.id)
-                if str(role.id) in config.get('auto_roles', {}):
-                    roles_to_add = config['auto_roles'][str(role.id)]
-                    roles = [discord.Object(id=int(r)) for r in roles_to_add]
-                    try:
-                        await member.add_roles(*roles, reason="Auto role addition")
-                    except discord.Forbidden:
-                        pass
-            
-            # Handle temporary roles
-            if str(role_id) in roles_config.get("temp_roles", {}):
-                duration = roles_config["temp_roles"][str(role_id)]
-                await asyncio.sleep(duration)
-                if role in member.roles:
-                    await member.remove_roles(role)
-
-    @commands.Cog.listener()
-    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
-        """Handle reaction role removal"""
-        roles_config = await self.bot.data_manager.load_json("roles", self.roles_key)
-        message_roles = roles_config["reaction_roles"].get(str(payload.message_id))
-        
-        if not message_roles:
-            return
-            
-        role_id = message_roles.get(str(payload.emoji))
-        if not role_id:
-            return
-            
-        guild = self.bot.get_guild(payload.guild_id)
-        role = guild.get_role(int(role_id))
-        member = guild.get_member(payload.user_id)
-        
-        if role and member and role in member.roles:
-            await member.remove_roles(role)
-            await self.update_role_analytics(guild.id, role.id, "remove")
-
-    async def _cleanup_warnings(self):
-        """Background task to clean up expired warnings"""
-        await self.bot.wait_until_ready()
-        while not self.bot.is_closed():
-            try:
-                infractions = await self.bot.data_manager.load_json("infractions", "infractions_key")
-                current_time = datetime.utcnow()
-                modified = False
-
-                for guild_id, guild_infractions in list(infractions.items()):
-                    for user_id, user_infractions in list(guild_infractions.items()):
-                        active_infractions = [
-                            inf for inf in user_infractions 
-                            if not inf.get("expires_at") or 
-                            datetime.fromisoformat(inf["expires_at"]) > current_time
-                        ]
-                        if len(active_infractions) != len(user_infractions):
-                            guild_infractions[user_id] = active_infractions
-                            modified = True
-
-                if modified:
-                    await self.bot.data_manager.save_json("infractions", "infractions_key", infractions)
-                    self.logger.info("Cleaned up expired warnings")
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.logger.error(f"Error in warning cleanup task: {e}")
-
-            try:
-                await asyncio.sleep(3600)  # Check every hour
-            except asyncio.CancelledError:
-                break
+                if roles_to_add:
+                    await member.add_roles(*roles_to_add, reason="Restoring persistent roles")
+                    
+                # Clean up stored roles
+                del config["stored_roles"][guild_id][str(member.id)]
+                await self.bot.data_manager.save_json("roles", self.roles_key, config)
+        except Exception as e:
+            self.logger.error(f"Error in on_member_join event: {e}")
 
 async def setup(bot):
     await bot.add_cog(RoleManager(bot))

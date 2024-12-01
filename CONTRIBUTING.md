@@ -1,131 +1,203 @@
-# Contributing to Strwbrry Jam Bot
+# Contributing to Strwbrry Jam Bot 🍓
 
-Thank you for your interest in contributing to Strwbrry Jam Bot! This document provides guidelines and instructions for contributing.
+First off, thank you for considering contributing to Strwbrry Jam Bot! This document provides guidelines and instructions for contributing.
 
-## Getting Started
+## 📋 Table of Contents
+- [Code of Conduct](#code-of-conduct)
+- [Getting Started](#getting-started)
+- [Development Process](#development-process)
+- [Pull Request Process](#pull-request-process)
+- [Coding Standards](#coding-standards)
+- [Testing](#testing)
+- [Documentation](#documentation)
 
-### Prerequisites
-- Python 3.8 or higher
-- PostgreSQL database
-- Git
+## 📜 Code of Conduct
 
-### Development Setup
-1. Fork and clone the repository:
+### Our Pledge
+We pledge to make participation in our project a harassment-free experience for everyone.
+
+### Our Standards
+- Be respectful and inclusive
+- Accept constructive criticism
+- Focus on what's best for the community
+- Show empathy towards others
+
+## 🚀 Getting Started
+
+1. Fork the repository
+2. Clone your fork:
+   ```bash
+   git clone https://github.com/yourusername/strwbrry_jam_bot.git
+   ```
+3. Create a feature branch:
+   ```bash
+   git checkout -b feature/my-new-feature
+   ```
+
+## 💻 Development Process
+
+### 1. Setting Up Development Environment
 ```bash
-git clone https://github.com/apifinyyy/strwbrry_jam_bot.git
-cd strwbrry_jam_bot
-```
-
-2. Create a virtual environment:
-```bash
+# Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+source venv/bin/activate  # Linux/Mac
+# or
+.\venv\Scripts\activate  # Windows
 
-3. Install dependencies:
-```bash
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-4. Create a `.env` file:
-```env
-DISCORD_TOKEN=your_bot_token
-DATABASE_URL=postgresql://user:password@localhost/database
+### 2. Making Changes
+1. Create a new branch for your feature
+2. Write your code
+3. Add tests
+4. Update documentation
+5. Run tests locally
+6. Commit changes
+
+### 3. Code Style
+- Use [Black](https://github.com/psf/black) for formatting
+- Follow PEP 8 guidelines
+- Use type hints
+- Add docstrings to all functions/classes
+- Comment complex logic
+
+Example:
+```python
+from typing import Optional
+
+def my_function(param: str, optional_param: Optional[int] = None) -> bool:
+    """
+    Brief description of function.
+
+    Args:
+        param: Description of param
+        optional_param: Description of optional_param
+
+    Returns:
+        Description of return value
+
+    Raises:
+        ValueError: Description of when this error occurs
+    """
+    pass
 ```
 
-5. Initialize the database:
-```bash
-psql -U postgres
-CREATE DATABASE your_database_name;
-```
+## 🔄 Pull Request Process
 
-## Code Style
+1. Update documentation
+2. Run all tests
+3. Update CHANGELOG.md
+4. Submit PR with clear description
+5. Wait for review
+6. Address feedback
+7. Get approval
+8. Merge
 
-### Python Guidelines
-- Follow PEP 8 style guide
-- Use type hints for function parameters and returns
-- Add docstrings for all classes and functions
-- Keep functions focused and under 50 lines
-- Use meaningful variable names
-
-### Discord.py Best Practices
-- Use app commands (slash commands) for all new features
-- Include command descriptions and parameter help
-- Implement proper permission checks
-- Handle all possible errors gracefully
-- Use deferred responses for long operations
-
-### Git Workflow
-1. Create a new branch for your feature:
-```bash
-git checkout -b feature/your-feature-name
-```
-
-2. Make your changes and commit them:
-```bash
-git add .
-git commit -m "feat: your descriptive commit message"
-```
-
-3. Push to your fork:
-```bash
-git push origin feature/your-feature-name
-```
-
-4. Create a Pull Request
-
-### Commit Message Format
-Follow the Conventional Commits specification:
-- feat: New feature
+### PR Title Format
+- feat: Add new feature
 - fix: Bug fix
 - docs: Documentation changes
 - style: Code style changes
 - refactor: Code refactoring
-- test: Adding tests
+- test: Add/modify tests
 - chore: Maintenance tasks
 
-Example:
+## 📝 Coding Standards
+
+### File Structure
 ```
-feat(social): add profile themes system
-
-- Add theme selection command
-- Implement theme color handling
-- Add theme preview option
+strwbrry_jam_bot/
+├── cogs/
+│   ├── __init__.py
+│   ├── template_cog.py
+│   └── your_feature.py
+├── utils/
+│   └── helpers.py
+└── tests/
+    └── test_your_feature.py
 ```
 
-## Testing
-- Write unit tests for new features
-- Test your changes with the bot in a test server
-- Ensure all existing tests pass
-- Add integration tests for database operations
+### Cog Template
+Use `cogs/template_cog.py` as base for new cogs:
+```python
+class YourFeature(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.logger = bot.logger.getChild('your_feature')
 
-## Documentation
-- Update API.md for new features
-- Add JSDoc-style comments for complex functions
-- Update README.md if adding major features
-- Create examples for new commands
+    @app_commands.command()
+    async def your_command(self, interaction: discord.Interaction):
+        """Command description"""
+        pass
 
-## Pull Request Process
-1. Update relevant documentation
-2. Add tests for new features
-3. Ensure CI/CD passes
-4. Request review from maintainers
-5. Address review comments
-6. Squash commits if requested
+async def setup(bot):
+    await bot.add_cog(YourFeature(bot))
+```
 
-## Code Review
-Your PR will be reviewed for:
-- Code quality and style
-- Test coverage
-- Documentation
-- Performance implications
-- Security considerations
+## 🧪 Testing
 
-## Getting Help
-- Create an issue for bug reports
-- Join our Discord server for questions
-- Check existing issues and PRs first
-- Ask in #development channel
+### Running Tests
+```bash
+# Run all tests
+pytest
 
-## License
-By contributing, you agree that your contributions will be licensed under the project's license.
+# Run specific test file
+pytest tests/test_your_feature.py
+
+# Run with coverage
+pytest --cov=.
+```
+
+### Writing Tests
+```python
+import pytest
+from your_feature import YourFeature
+
+@pytest.mark.asyncio
+async def test_your_feature():
+    # Setup
+    bot = MockBot()
+    cog = YourFeature(bot)
+    
+    # Test
+    result = await cog.your_command()
+    
+    # Assert
+    assert result == expected_result
+```
+
+## 📚 Documentation
+
+### Docstring Format
+```python
+def function_name(param: type) -> return_type:
+    """
+    Brief description.
+
+    Args:
+        param: Parameter description
+
+    Returns:
+        Description of return value
+
+    Raises:
+        ErrorType: When error occurs
+    """
+    pass
+```
+
+### README Updates
+- Keep feature list current
+- Update setup instructions
+- Document new commands
+- Update troubleshooting
+
+## ❓ Questions?
+
+- Open an issue
+- Join our Discord server
+- Contact maintainers
+
+Thank you for contributing! 🎉

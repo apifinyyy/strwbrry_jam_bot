@@ -24,16 +24,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - User profiles storage
   - Server settings persistence
   - Efficient data querying
+- Connection pool configuration for PostgreSQL.
+- Placeholders for data encryption and decryption.
 
 ### Changed
 - Migrated to slash commands
 - Improved error handling
 - Enhanced logging system
+- Refactored code for better readability and maintainability.
+- Enhanced error handling and logging.
+- Updated documentation to reflect current features and improvements.
 
 ### Fixed
 - Font loading issues
 - Memory leaks in image processing
 - Database connection handling
+- Improved performance of database operations.
+- Ensured PEP 8 compliance across the codebase.
 
 ## [1.0.0] - 2024-11-29
 

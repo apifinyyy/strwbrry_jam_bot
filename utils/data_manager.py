@@ -7,14 +7,15 @@ from datetime import datetime
 import asyncio
 import asyncpg
 import aiosqlite
+import aiofiles
 
 class DataManagerError(Exception):
     """Base exception class for DataManager errors."""
     pass
 
 class DataManager:
-    def __init__(self, base_path: str = "data", database_url: str = None):
-        """Initialize the data manager with a base path for data storage."""
+    def __init__(self, base_path: str = "data", database_url: str = None, pool_min_size: int = 1, pool_max_size: int = 10):
+        """Initialize the data manager with a base path for data storage and database pool settings."""
         self.base_path = Path(base_path)
         self.base_path.mkdir(exist_ok=True)
         self.cache: Dict[str, Dict[str, Any]] = {}
@@ -37,6 +38,8 @@ class DataManager:
         # Initialize database connection
         self.database_url = database_url
         self.pool = None
+        self.pool_min_size = pool_min_size
+        self.pool_max_size = pool_max_size
         self.db_path = os.path.join(os.path.dirname(__file__), "..", "data", "bot.db")
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
@@ -47,23 +50,47 @@ class DataManager:
             await self.initialize_database()
             self.logger.info(f"Connected to SQLite database at {self.db_path}")
         except Exception as e:
-            self.logger.error(f"Failed to connect to SQLite database: {e}")
-            raise DataManagerError(f"Failed to connect to SQLite database: {e}")
+            self.logger.error(f"Error connecting to SQLite: {e}")
+            raise DataManagerError(f"Failed to connect to SQLite: {e}")
 
     async def connect_to_database(self):
-        """Connect to the database (PostgreSQL or SQLite)."""
+        """Connect to the database."""
         try:
             if self.database_url:
-                self.logger.info("Connecting to PostgreSQL database...")
-                self.pool = await asyncpg.create_pool(self.database_url)
-                await self.initialize_database()
+                # PostgreSQL
+                self.pool = await asyncpg.create_pool(
+                    self.database_url,
+                    min_size=self.pool_min_size,
+                    max_size=self.pool_max_size
+                )
+                self.logger.info("Connected to PostgreSQL database")
             else:
-                self.logger.info("Using SQLite database...")
+                # SQLite
                 await self.connect_to_sqlite()
+                self.logger.info("Connected to SQLite database")
+
+            # Initialize tables
+            await self.initialize_database()
+            
         except Exception as e:
-            self.logger.error(f"Failed to connect to database: {e}")
+            self.logger.error(f"Error connecting to database: {e}")
             raise DataManagerError(f"Failed to connect to database: {e}")
-    
+
+    async def get_connection(self):
+        """Get a database connection"""
+        try:
+            if self.database_url:
+                if not self.pool:
+                    await self.connect_to_database()
+                return self.pool
+            else:
+                if not hasattr(self, 'conn') or self.conn is None:
+                    await self.connect_to_sqlite()
+                return self.conn
+        except Exception as e:
+            self.logger.error(f"Failed to get database connection: {e}")
+            raise DataManagerError(f"Failed to get database connection: {e}")
+
     async def initialize_database(self):
         """Initialize the database tables."""
         try:
@@ -121,19 +148,65 @@ class DataManager:
             self.logger.error(f"Error initializing database: {e}")
             raise DataManagerError(f"Failed to initialize database: {e}")
     
-    async def get_connection(self):
-        """Get a database connection"""
+    async def get_user_profile(self, user_id: int) -> dict:
+        """Get a user's profile data"""
         try:
-            if self.database_url:
-                if not self.pool:
-                    self.pool = await asyncpg.create_pool(self.database_url)
-                return await self.pool.acquire()
-            else:
-                return await aiosqlite.connect(self.db_path)
+            if self.database_url:  # PostgreSQL
+                async with self.pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT profile FROM user_profiles WHERE user_id = $1",
+                        user_id
+                    )
+                    return json.loads(row['profile']) if row else {}
+            else:  # SQLite
+                conn = await self.get_connection()
+                async with conn.execute(
+                    "SELECT profile FROM user_profiles WHERE user_id = ?",
+                    (user_id,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    return json.loads(row[0]) if row else {}
         except Exception as e:
-            self.logger.error(f"Failed to get database connection: {e}")
-            raise DataManagerError(f"Failed to get database connection: {e}")
+            self.logger.error(f"Failed to get user profile: {e}")
+            return {}  # Return empty dict on error
 
+    async def update_user_profile(self, user_id: int, **fields):
+        """Update user profile fields."""
+        try:
+            # Get current profile
+            current_profile = await self.get_user_profile(user_id)
+            
+            # Update fields
+            current_profile.update(fields)
+            profile_json = json.dumps(current_profile)
+            
+            if self.database_url:  # PostgreSQL
+                async with self.pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO user_profiles (user_id, profile)
+                        VALUES ($1, $2)
+                        ON CONFLICT (user_id) 
+                        DO UPDATE SET profile = $2
+                        """,
+                        user_id, profile_json
+                    )
+            else:  # SQLite
+                conn = await self.get_connection()
+                await conn.execute(
+                    """
+                    INSERT OR REPLACE INTO user_profiles (user_id, profile)
+                    VALUES (?, ?)
+                    """,
+                    (user_id, profile_json)
+                )
+                await conn.commit()
+            
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to update user profile: {e}")
+            return False  # Return False on error
+    
     async def save_json(self, table: str, key: str, data: dict) -> bool:
         """Save JSON data to the database"""
         try:
@@ -190,13 +263,12 @@ class DataManager:
             self.logger.error(f"Failed to load JSON data from {table}: {e}")
             raise DataManagerError(f"Failed to load JSON data: {e}")
 
-    async def exists(self, table: str, key: str = None, condition: str = None) -> bool:
+    async def exists(self, table: str, key: str = None) -> bool:
         """Check if a record exists in the database.
         
         Args:
             table (str): The table_name to check in key_value_store
             key (str, optional): The key to check in key_value_store
-            condition (str, optional): Not used, kept for backward compatibility
         """
         try:
             if self.database_url:
@@ -233,26 +305,47 @@ class DataManager:
             self.logger.error(f"Failed to check existence in {table}: {e}")
             raise DataManagerError(f"Failed to check existence: {e}")
 
-    async def save(self, table: str, key: str, data: dict) -> bool:
-        """Alias for save_json for backward compatibility"""
+    async def save(self, table: str, key: str = "default", data: dict = None) -> bool:
+        """Save data to the database.
+        
+        Args:
+            table (str): The table name to save to
+            key (str, optional): The key within the table. Defaults to "default".
+            data (dict, optional): The data to save. Required if key is provided.
+        """
+        if data is None:
+            # If no data provided, assume the key parameter is actually the data
+            data = key
+            key = "default"
+            
         return await self.save_json(table, key, data)
 
-    async def load(self, table: str, key: str) -> dict:
-        """Alias for load_json for backward compatibility"""
-        return await self.load_json(table, key)
-
-    async def get_connection(self):
-        """Get a database connection"""
+    async def load(self, data_type: str, key: str = "default") -> dict:
+        """Load data from JSON file"""
         try:
-            if self.database_url:
-                if not self.pool:
-                    self.pool = await asyncpg.create_pool(self.database_url)
-                return await self.pool.acquire()
-            else:
-                return await aiosqlite.connect(self.db_path)
+            file_path = self._get_file_path(data_type, key)
+            if not os.path.exists(file_path):
+                return {}
+                
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                return json.loads(content) if content else {}
         except Exception as e:
-            self.logger.error(f"Failed to get database connection: {e}")
-            raise DataManagerError(f"Failed to get database connection: {e}")
+            self.logger.error(f"Failed to load JSON data from {data_type}: {str(e)}")
+            return {}
+
+    async def save(self, data_type: str, key: str, data: dict) -> bool:
+        """Save data to JSON file"""
+        try:
+            file_path = self._get_file_path(data_type, key)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            
+            async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(data, indent=4))
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to save JSON data to {data_type}: {str(e)}")
+            return False
 
     def _get_guild_path(self, guild_id: int) -> Path:
         """Get the path for a specific guild's data directory."""
@@ -413,6 +506,74 @@ class DataManager:
             self.logger.error(f"Error closing database connections: {e}")
             raise DataManagerError(f"Failed to close database connections: {e}")
 
+    async def close_connections(self):
+        """Close database connections."""
+        try:
+            if self.pool:
+                await self.pool.close()
+                self.logger.info("PostgreSQL connection pool closed.")
+            if hasattr(self, 'conn') and self.conn:
+                await self.conn.close()
+                self.logger.info("SQLite connection closed.")
+        except Exception as e:
+            self.logger.error(f"Error closing database connections: {e}")
+
+    async def add_index(self, table_name: str, column_name: str):
+        """Add an index to a specified column in a table."""
+        try:
+            if self.database_url:
+                async with self.pool.acquire() as conn:
+                    await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{column_name} ON {table_name} ({column_name})")
+                    self.logger.info(f"Index created on {table_name}.{column_name}.")
+            else:
+                async with aiosqlite.connect(self.db_path) as conn:
+                    await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{column_name} ON {table_name} ({column_name})")
+                    self.logger.info(f"Index created on {table_name}.{column_name}.")
+        except Exception as e:
+            self.logger.error(f"Error creating index on {table_name}.{column_name}: {e}")
+
+    async def execute_query(self, query: str, *args):
+        """Execute a parameterized query."""
+        try:
+            if self.database_url:
+                async with self.pool.acquire() as conn:
+                    result = await conn.fetch(query, *args)
+                    return result
+            else:
+                async with aiosqlite.connect(self.db_path) as conn:
+                    async with conn.execute(query, args) as cursor:
+                        result = await cursor.fetchall()
+                        return result
+        except Exception as e:
+            self.logger.error(f"Error executing query: {e}")
+            raise DataManagerError(f"Error executing query: {e}")
+
+    async def execute_non_query(self, query: str, *args):
+        """Execute a parameterized non-query (e.g., INSERT, UPDATE)."""
+        try:
+            if self.database_url:
+                async with self.pool.acquire() as conn:
+                    await conn.execute(query, *args)
+            else:
+                async with aiosqlite.connect(self.db_path) as conn:
+                    await conn.execute(query, args)
+                    await conn.commit()
+        except Exception as e:
+            self.logger.error(f"Error executing non-query: {e}")
+            raise DataManagerError(f"Error executing non-query: {e}")
+
+    async def encrypt_sensitive_data(self, data: str) -> str:
+        """Encrypt sensitive data before storing it."""
+        # Placeholder for encryption logic
+        # Implement encryption logic here
+        return data
+
+    async def decrypt_sensitive_data(self, encrypted_data: str) -> str:
+        """Decrypt sensitive data after retrieving it."""
+        # Placeholder for decryption logic
+        # Implement decryption logic here
+        return encrypted_data
+
     # Utility Methods
     async def get_poll_settings(self, guild_id: int) -> dict:
         """Get poll settings for a guild"""
@@ -457,66 +618,6 @@ class DataManager:
                 """,
                 guild_id, {"giveaway_settings": settings}
             )
-
-    async def get_user_profile(self, user_id: int) -> dict:
-        """Get a user's profile data"""
-        try:
-            if self.database_url:  # PostgreSQL
-                async with self.pool.acquire() as conn:
-                    row = await conn.fetchrow(
-                        "SELECT profile FROM user_profiles WHERE user_id = $1",
-                        user_id
-                    )
-                    return json.loads(row['profile']) if row else {}
-            else:  # SQLite
-                async with await self.get_connection() as conn:
-                    async with conn.cursor() as cursor:
-                        await cursor.execute(
-                            "SELECT profile FROM user_profiles WHERE user_id = ?",
-                            (user_id,)
-                        )
-                        row = await cursor.fetchone()
-                        return json.loads(row[0]) if row else {}
-        except Exception as e:
-            self.logger.error(f"Failed to get user profile: {e}")
-            raise DataManagerError(f"Failed to get user profile: {e}")
-
-    async def update_user_profile(self, user_id: int, **fields):
-        """Update user profile fields."""
-        try:
-            # Get current profile
-            current_profile = await self.get_user_profile(user_id)
-            
-            # Update fields
-            current_profile.update(fields)
-            profile_json = json.dumps(current_profile)
-            
-            if self.database_url:  # PostgreSQL
-                async with self.pool.acquire() as conn:
-                    await conn.execute(
-                        """
-                        INSERT INTO user_profiles (user_id, profile)
-                        VALUES ($1, $2)
-                        ON CONFLICT (user_id) 
-                        DO UPDATE SET profile = $2
-                        """,
-                        user_id, profile_json
-                    )
-            else:  # SQLite
-                async with await self.get_connection() as conn:
-                    await conn.execute(
-                        """
-                        INSERT OR REPLACE INTO user_profiles (user_id, profile)
-                        VALUES (?, ?)
-                        """,
-                        (user_id, profile_json)
-                    )
-                    await conn.commit()
-            
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to update user profile: {e}")
-            raise DataManagerError(f"Failed to update user profile: {e}")
 
     async def add_user_badge(self, user_id: int, badge_id: str) -> None:
         """Add a badge to a user's profile"""
@@ -615,6 +716,17 @@ class DataManager:
         except Exception as e:
             self.logger.error(f"Error initializing database: {e}")
             raise DataManagerError(f"Failed to initialize database: {e}")
+
+    async def cleanup(self):
+        """Clean up database connections and resources."""
+        try:
+            if hasattr(self, 'conn'):
+                await self.conn.close()
+            if self.pool:
+                await self.pool.close()
+            self.logger.info("Database connections closed")
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
 
 # Default instance
 data_manager = DataManager()

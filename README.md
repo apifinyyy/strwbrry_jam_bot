@@ -1,224 +1,88 @@
 # Strwbrry Jam Bot 🍓
 
-A feature-rich Discord utility bot with social features, economy system, games, and server management tools. Built with discord.py
+A powerful, user-friendly Discord bot that makes server management fun and easy! Built with discord.py.
 
-## ✨ Features
+![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)
+![discord.py Version](https://img.shields.io/badge/discord.py-2.3.2+-blue.svg)
+![License](https://img.shields.io/github/license/apifinyyy/strwbrry_jam_bot)
 
-### 🎭 Social System
-- Rich profile customization
-  * Multiple themes (default, night, sunset)
-  * Custom titles and bios
-  * Badge collection system
-  * Dynamic profile cards
-  * Achievement tracking
-  * Interactive elements
+## 🌟 What Can This Bot Do?
 
-### 🎮 Games & Activities
-- Rock Paper Scissors
-  * Player vs Bot matches
-  * Currency rewards
-  * Win tracking
-- Trivia System
-  * Various categories
-  * Timed challenges
-  * Score tracking
-- Math Puzzles
-  * Difficulty levels
-  * Quick solve rewards
-- Chat Games
-  * Word chains
-  * Type racing
-  * Scramble words
-- Gambling System
-  * Fair odds
-  * Loss protection
-  * Betting limits
+### 👥 Social Features
+- **Profile System**: Customizable profiles with themes
+- **Economy**: Shop, trade, and earn virtual currency
+- **XP System**: Gain levels and earn role rewards
+- **Achievements**: Track your accomplishments
 
-### 💰 Economy System
-- Currency Management
-  * Daily rewards
-  * Weekly bonuses
-  * Activity rewards
-  * Game winnings
-- Shop System
-  * Role purchases
-  * Custom items
-  * Limited offers
-- Leaderboards
-  * Richest users
-  * Most active
-  * Top winners
+### 🎮 Fun & Games
+- **Mini-games**: Rock Paper Scissors, Trivia, and more!
+- **Gambling**: Try your luck with fair odds
+- **Word Games**: Test your vocabulary
+- **Leaderboards**: Compete with friends
 
-### ⭐ Experience System
-- Multi-Track XP
-  * Chat activity XP
-  * Voice time XP
-  * Game participation XP
-- Leaderboards
-  * Server rankings
-  * Category leaders
-  * Progress tracking
-- Role Rewards
-  * Level-based roles
-  * Activity rewards
-  * Special perks
+### 🛡️ Server Management Made Easy
+- **Simple Moderation**: Warnings, mutes, bans
+- **Support Tickets**: Help your members effectively
+- **Auto-moderation**: Keep your server safe
+- **Detailed Logs**: Track what's happening
 
-### 🎫 Support Tickets
-- Advanced Ticket System
-  * Custom categories
-  * Priority levels
-  * Staff assignment
-- Management Tools
-  * Archive system
-  * Response templates
-  * Status tracking
+### 🤖 Helpful Tools
+- **Welcome Messages**: Greet new members
+- **Role Management**: Auto-roles and reaction roles
+- **Server Stats**: Track your growth
+- **Polls & Reminders**: Engage your community
 
-### 🎭 Role Management
-- Automated Systems
-  * Join roles
-  * Level roles
-  * Activity roles
-- Custom Setup
-  * Role hierarchy
-  * Permission management
-  * Role shop integration
+## 🚀 Get Started in 5 Minutes
 
-### 👋 Welcome System
-- Customizable Messages
-  * Welcome messages
-  * Goodbye messages
-  * Custom formats
-- Channel Configuration
-  * Dedicated channels
-  * Message formatting
-  * Embed support
-- Auto-Role System
-  * Join roles
-  * Verification roles
-  * Level-based roles
+1. **Invite the Bot**
+   - [Click here to invite Strwbrry Jam to your server](https://discord.com/oauth2/authorize?...)
+   - Select your server and click "Authorize"
 
-### 📝 Server Logs
-- Comprehensive Logging
-  * Message events
-  * Member activity
-  * Role changes
-  * Channel updates
-- Custom Settings
-  * Log channels
-  * Event filters
-  * Format options
-- Detailed Embeds
-  * Rich formatting
-  * Event context
-  * Time tracking
+2. **Quick Setup**
+   ```
+   /setup quickstart  # Run the quick setup wizard
+   /help             # See all commands
+   ```
 
-### 🛡️ Advanced Moderation
-- Smart Warning System
-  * Configurable thresholds
-  * Multiple severity levels
-  * Automated punishments
-  * Warning expiry
-- Redemption System
-  * Customizable tasks
-  * Point-based reduction
-  * Progress tracking
-  * Staff review system
-- Warning Appeals
-  * User-friendly interface
-  * Staff management tools
-  * Appeal cooldowns
-  * Detailed tracking
-- Universal Warnings
-  * Cross-server warnings
-  * Warning transfer
-  * Configurable weights
-  * Shared history
+3. **That's it!** The bot is ready to use with sensible defaults.
 
-## 🚀 Quick Start
+## 📚 Need Help?
 
-### Prerequisites
-- Python 3.8+
-- PostgreSQL database
-- Discord Bot Token
+- Type `/help` to see all commands
+- Visit our [Support Server](https://discord.gg/XcH8JmGaHZ)
+- Check the [User Guide](docs/USER_GUIDE.md)
+- Read the [FAQ](docs/USER_GUIDE.md#faq)
 
-### Installation
+## 🛠️ For Developers
 
-1. Clone the repository:
-```bash
-git clone https://github.com/apifinyyy/strwbrry_jam_bot.git
-cd strwbrry_jam_bot
-```
+Want to host your own instance or contribute?
 
-2. Create a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+1. **Quick Setup**
+   ```bash
+   git clone https://github.com/apifinyyy/strwbrry_jam_bot.git
+   cd strwbrry_jam_bot
+   python -m venv venv
+   source venv/bin/activate  # or .\venv\Scripts\activate on Windows
+   pip install -r requirements.txt
+   # Copy .env.example to .env and edit it
+   python main.py
+   ```
 
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+2. **Documentation**
+   - [Getting Started Guide](docs/GETTING_STARTED.md)
+   - [Contributing Guide](CONTRIBUTING.md)
+   - [API Reference](docs/API.md)
 
-4. Create a `.env` file:
-```env
-DISCORD_TOKEN=your_bot_token_here
-DATABASE_URL=postgresql://user:password@localhost/database
-```
+## ❤️ Support the Project
 
-5. Initialize the database:
-```bash
-psql -U postgres
-CREATE DATABASE your_database_name;
-```
-
-6. Run the bot:
-```bash
-python main.py
-```
-
-## 📚 Documentation
-
-- [API Documentation](docs/API.md) - Detailed API reference
-- [Contributing Guide](CONTRIBUTING.md) - How to contribute
-- [Changelog](CHANGELOG.md) - Version history
-
-## 💻 Usage
-
-### Basic Commands
-- `/help` - View all commands
-- `/config` - Configure bot settings
-- `/profile` - View your profile
-- `/economy` - View economy commands
-- `/games` - View available games
-
-### Admin Commands
-- `/settings` - Server settings
-- `/logs` - Configure logging
-- `/autorole` - Setup auto roles
-- `/tickets` - Manage ticket system
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+- ⭐ Star this repository
+- 🐛 Report bugs and suggest features
+- 🤝 Contribute code or documentation
+- 🌟 Share with your friends
 
 ## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🌟 Support
-
-Join our [Discord Server](https://discord.gg/XcH8JmGaHZ) for support and updates.
-
-## 📊 Stats
-
-![GitHub Stars](https://img.shields.io/github/stars/apifinyyy/strwbrry_jam_bot)
-![GitHub Issues](https://img.shields.io/github/issues/apifinyyy/strwbrry_jam_bot)
-![GitHub Pull Requests](https://img.shields.io/github/issues-pr/apifinyyy/strwbrry_jam_bot)
-![License](https://img.shields.io/github/license/apifinyyy/strwbrry_jam_bot)
-
-## 🙏 Acknowledgments
-
-- [discord.py](https://github.com/Rapptz/discord.py)
-- [PostgreSQL](https://www.postgresql.org/)
-- All our contributors
+---
+Made with ❤️ by the Strwbrry Jam team
